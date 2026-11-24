@@ -36,6 +36,8 @@ CLI flag 在扩展加载后才解析；Gate 在每次请求时读取，支持运
 | Allow once | 等待 arm 后执行，target 删除 |
 | 1000ms 超时 | 对话框关闭，命令未执行 |
 | headless `-p` | 默认拒绝，target 保留 |
+| RPC `--mode rpc` | 默认拒绝，事件中返回 `Blocked by approval gate`，target 保留 |
+| 子代理环境 | `PI_SUBAGENT_CHILD=1` 默认拒绝，无对话框，target 保留 |
 | 最终指纹 | 精确 command/cwd 消费一次；改写 command/cwd 抛错 |
 | 安全命令 | 无需审批直接执行 |
 | 子代理 | `PI_SUBAGENT_CHILD=1` 默认拒绝 |
