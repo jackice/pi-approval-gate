@@ -1,0 +1,38 @@
+{
+  "name": "@jackice/pi-approval-gate",
+  "version": "0.1.0",
+  "description": "Dangerous bash approval gate for Pi with final execution-parameter binding.",
+  "type": "module",
+  "license": "MIT",
+  "author": "jackice",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "^1.6.0",
+    "@jackice/pi-ui": "^0.4.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.6.0",
+    "@earendil-works/pi-tui": "1.6.0",
+    "@jackice/pi-ui": "file:../pi-ui",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
