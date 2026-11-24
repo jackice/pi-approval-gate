@@ -32,11 +32,12 @@
 | L8 | Low | 审批无持久审计 entry |
 | — | — | 可信 RPC 审批通道未接入，RPC 危险命令默认拒绝 |
 | — | — | `pi.exec`、其他工具面（write/edit/MCP/powershell）不在 bash Gate 范围 |
-| — | — | 独立评审后的复审尚未执行 |
+| — | — | 已发起独立复审，未产出结论；G4 不视为通过 |
 
 ## 回归
 
-- `pi-approval-gate`：64 个测试（策略 51、Gate 6、绑定 3、对话框 4）
+- `pi-approval-gate`：66 个测试（新增两项注册来源检查）。
+- 候选 tarball 在 Pi 1.6.0 隔离共装验证：加载路径和工具来源路径指向同一文件时允许使用；缺失或不同来源仍阻断。启动探针没有执行审批，不能替代最终绑定与取消验证。
 - 真机：
   - 危险命令 deny / allow / timeout
   - fullscreen 20 行命令 PgDn 后可见 `rm -rf target`
