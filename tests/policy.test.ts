@@ -58,7 +58,17 @@ const safe = [
 ];
 
 describe("bash policy", () => {
-  it("detects rm invocations including wrappers", () => {
+  it.each(dangerous)("flags %s", (command) => {
+    expect(isDangerousBash(command)).toBe(true);
+    expect(typeof dangerReason(command)).toBe("string");
+  });
+
+  it.each(safe)("allows %s", (command) => {
+    expect(isDangerousBash(command)).toBe(false);
+    expect(dangerReason(command)).toBeUndefined();
+  });
+
+  it("detects rm invocations through wrappers and quotes", () => {
     expect(hasRmInvocation("rm -rf /tmp/x")).toBe(true);
     expect(hasRmInvocation("sh -c 'rm -rf /tmp/x'")).toBe(true);
     expect(hasRmInvocation("r''m -rf /tmp/x")).toBe(true);

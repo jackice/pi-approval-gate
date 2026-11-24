@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+- 安全评审 C1/H1/H2/H3 修复：线性 quote-aware 策略、包装命令递归、fail-closed、git/gh 全局选项、fullscreen 分页
+- M1/M2/M3/M4/M5 修复：移除超线性正则、继承 shell 前缀、拦截 user_bash、bidi 清洗、影子注册自检
+- L1/L3/L4/L6 修复：关闭清理指纹、maxCommandLines 兜底、分页键位、配置 clamp
+- 64 个测试；真实 TUI/fullscreen/user_bash/RPC/子代理验证
+
 ## 0.1.0
 
 - 新增 ApprovalGate：FIFO 队列、120s 超时、abort/shutdown 幂等取消、最多 16 个待请求
@@ -7,4 +14,3 @@
 - 新增 `ApprovalView` 对话框：完整命令、cwd、reason、风险、Allow once/Deny、滚动、500ms arm
 - RPC/headless/子代理默认拒绝
 - 真实 Pi RPC 与 `PI_SUBAGENT_CHILD=1` 验证默认拒绝
-- 12 个测试；真实 TUI 验证 deny/allow/timeout/headless 与最终参数绑定
