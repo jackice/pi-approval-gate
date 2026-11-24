@@ -1,52 +1,53 @@
 # @jackice/pi-approval-gate
 
-Pi 的危险 bash 审批 Gate。通过替换受支持的 `bash` 执行边界，把审批绑定到最终 `command`/`cwd`，避免 `tool_call` 之后参数被改写。
+An approval extension for Pi's supported Bash execution paths. It binds user approval to the final command and working directory, after `tool_call` handlers have run.
 
-- 基线：Pi `1.6.0`、`@jackice/pi-ui` `0.4.2`
-- 默认拒绝：TUI 以外、无 UI、子代理、超时、abort、reload/shutdown
-- 不修改原生 Pi 源码；使用 `registerTool` 覆盖 `bash`
-- 策略使用线性 quote-aware 分词与递归解析；无法解析时 fail-closed
-- 继承 `shellCommandPrefix` / `shellPath`，审批展示并绑定最终执行字符串
+- Verified with Pi `1.6.0` and `@jackice/pi-ui` `0.4.2`.
+- Commands that require approval are denied when no supported interactive UI is available, in subagents, or on timeout, abort, reload, or shutdown.
+- Registers a replacement `bash` tool through Pi's extension API. No Pi source changes are required.
+- Commands the policy cannot parse require approval.
+- Honors `shellCommandPrefix` and `shellPath` settings and shows the final command before execution.
+- Unreleased. The security re-review is still pending.
 
-## 工作方式
+## How it works
 
-1. `createBashToolDefinition(cwd, { commandPrefix, shellPath, spawnHook })` 创建受控 bash。
-2. 危险命令在 `execute` 中先 `await gate.request(...)`。审批发生在所有 `tool_call` 修改之后。
-3. 允许后写入一次性指纹（`command + cwd`）；真正 spawn 前 `spawnHook` 消费指纹。
-4. 指纹不匹配（命令或 cwd 被改写）→ 抛错，零副作用。
-5. 安全命令直接透传，无需审批。
-6. `user_bash`（`!`）危险命令走同一审批；操作 exec 前消费指纹。
-7. Gate 用真实路径确认活动 `bash` 的注册来源；无法确认来源时阻断。Pi 1.6.0 会拒绝重复注册 `bash`。
+1. The extension creates a Bash tool with `createBashToolDefinition` and a `spawnHook`.
+2. When the policy requires approval, the tool waits for the user after all `tool_call` changes.
+3. Approval authorizes one execution of the exact command in the exact working directory. The spawn hook consumes it before Bash starts.
+4. A mismatch stops execution before the command runs.
+5. Commands not flagged by the policy do not prompt.
+6. Pi's `user_bash` (`!`) uses the same approval and parameter binding for flagged commands.
+7. The extension checks the active `bash` registration against its own file's real path and blocks the tool if the source cannot be verified. Pi `1.6.0` rejects duplicate `bash` registrations.
 
-## 配置
+## Configuration
 
 ```text
---approval-timeout-ms <ms>   # 默认 120000，排队与等待都计时
---approval-arm-ms <ms>       # 默认 500，允许操作的确认保护
+--approval-timeout-ms <ms>   # Default: 120000; includes time spent in the queue.
+--approval-arm-ms <ms>       # Default: 500; minimum delay before allowing.
 PI_APPROVAL_TIMEOUT_MS
 PI_APPROVAL_ARM_MS
 ```
 
-CLI flag 在扩展加载后才解析；Gate 在每次请求时读取，支持运行时配置。
+Pi parses extension flags after loading the extension. Settings are read when each request is created.
 
-## 已验证
+## Verification
 
-真实 Pi 1.6.0 TUI + fake provider，命令 `rm -rf target`：
+Verified with Pi `1.6.0` in a real TUI, using a test provider and a disposable fixture:
 
-| 场景 | 结果 |
+| Scenario | Result |
 |---|---|
-| Esc / Deny | 命令未执行，target 保留 |
-| Allow once | 等待 arm 后执行，target 删除 |
-| 1000ms 超时 | 对话框关闭，命令未执行 |
-| headless `-p` | 默认拒绝，target 保留 |
-| RPC `--mode rpc` | 默认拒绝，事件中返回 `Blocked by approval gate`，target 保留 |
-| 子代理环境 | `PI_SUBAGENT_CHILD=1` 默认拒绝，无对话框，target 保留 |
-| fullscreen 长命令 | PgDn 后显示第 19 行 `rm -rf target` |
-| `user_bash` | `!rm -rf target` 弹出审批；deny 保留、allow 删除 |
-| `shellCommandPrefix` | 安全命令执行时包含配置前缀 |
-| 重复 bash 注册 | 宿主报 tool conflict，Gate 不会静默旁路 |
+| Esc / Deny | The command does not run. |
+| Allow once | The command runs after the arming delay. |
+| Timeout after 1000 ms | The dialog closes without executing the command. |
+| Headless `-p` | The command is denied by default. |
+| RPC `--mode rpc` | The command is denied by default with `Blocked by approval gate`. |
+| Subagent environment | `PI_SUBAGENT_CHILD=1` denies the command without a dialog. |
+| Long command in fullscreen | Page Down reveals lines below the initial viewport. |
+| `user_bash` | The `!` command prompts and executes only if allowed. |
+| `shellCommandPrefix` | The configured prefix is applied. |
+| Duplicate Bash registration | Pi reports a tool conflict rather than silently replacing the approval tool. |
 
-单元测试：
+Unit tests:
 
 ```bash
 pnpm install
@@ -54,11 +55,11 @@ pnpm typecheck
 pnpm test
 ```
 
-## 限制
+## Limitations
 
-- RPC 暂无已验证的可信外部审批通道，危险命令默认拒绝。
-- 子代理危险命令默认拒绝；父 Session 审批覆盖范围尚未接入。
-- `pi.exec`、`write`/`edit`、MCP、`powershell` 等其他工具面不在 bash Gate 范围。
-- arm 倒计时未在对话框显示；arm 内 Enter 无反馈。
-- 审批未持久化审计 entry。
-- 尚有 Low 级安全改进项；复审未执行。详见 `docs/security-review.md`。
+- RPC has no verified external approval channel. Commands that require approval are denied by default.
+- Subagent requests are denied, not escalated to the parent session.
+- This is not a sandbox. It covers only the supported Bash paths, not `pi.exec`, `write`, `edit`, MCP, or `powershell`.
+- The dialog does not show an arming countdown. Pressing Enter before the delay expires provides no feedback.
+- Approval decisions are not stored in an audit log.
+- Low-severity findings remain, and the security re-review has not concluded. See [the review notes](docs/security-review.md).
