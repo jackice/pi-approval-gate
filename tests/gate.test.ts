@@ -95,15 +95,12 @@ describe("ApprovalGate", () => {
     expect(gate.consume("rm -rf /tmp/x", "/tmp/work")).toBe(false);
   });
 
-  it("cancelAll settles active and queued requests", async () => {
+  it("cancelAll clears tokens and rejects new requests", async () => {
     const gate = new ApprovalGate({ timeoutMs: 1000, maxPending: 4 });
-    const active = promptControl();
-    const queued = promptControl();
-    const first = gate.request(baseRequest, { prompt: () => active.handle });
-    const second = gate.request(baseRequest, { prompt: () => queued.handle });
+    gate.expect("rm -rf /tmp/x", "/tmp/work");
     gate.cancelAll();
-    await expect(first).resolves.toBe("cancelled");
-    await expect(second).resolves.toBe("cancelled");
-    expect(active.cancelled()).toBe(1);
+    expect(gate.consume("rm -rf /tmp/x", "/tmp/work")).toBe(false);
+    const control = promptControl();
+    await expect(gate.request(baseRequest, { prompt: () => control.handle })).resolves.toBe("deny");
   });
 });

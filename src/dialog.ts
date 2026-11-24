@@ -42,6 +42,7 @@ export function createApprovalPrompt(
       });
       const started = Date.now();
       return {
+        capturesViewportInput: true,
         render: (width: number) => view.render(width),
         handleInput: (data: string) => {
           if (finished) return;

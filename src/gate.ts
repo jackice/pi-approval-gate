@@ -52,6 +52,7 @@ export class ApprovalGate {
   private readonly queue: QueuedRequest[] = [];
   private active: QueuedRequest | undefined;
   private readonly tokens = new Set<string>();
+  private closed = false;
 
   constructor(options: GateOptions) {
     this.timeoutMs = options.timeoutMs;
@@ -63,6 +64,7 @@ export class ApprovalGate {
     request: Omit<ApprovalRequest, "id" | "fingerprint">,
     options: { signal?: AbortSignal; prompt: (request: ApprovalRequest) => PromptHandle },
   ): Promise<ApprovalDecision> {
+    if (this.closed) return Promise.resolve("deny");
     const pending = this.queue.length + (this.active === undefined ? 0 : 1);
     if (pending >= this.maxPending) return Promise.resolve("deny");
 
@@ -108,6 +110,8 @@ export class ApprovalGate {
   }
 
   cancelAll(): void {
+    this.closed = true;
+    this.tokens.clear();
     const entries = this.active === undefined ? [...this.queue] : [this.active, ...this.queue];
     for (const entry of entries) this.settle(entry, "cancelled", false);
   }

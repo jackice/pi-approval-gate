@@ -1,6 +1,6 @@
 {
   "name": "@jackice/pi-approval-gate",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Dangerous bash approval gate for Pi with final execution-parameter binding.",
   "type": "module",
   "license": "MIT",
@@ -25,7 +25,7 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "^1.6.0",
-    "@jackice/pi-ui": "^0.4.0"
+    "@jackice/pi-ui": "^0.4.1"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "1.6.0",
