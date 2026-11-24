@@ -2,10 +2,11 @@
 
 ## 0.1.1
 
+- 按真实文件路径验证 `bash` 注册来源，避免符号链接安装误阻断自身工具；无法确认来源时仍拒绝。
 - 安全评审 C1/H1/H2/H3 修复：线性 quote-aware 策略、包装命令递归、fail-closed、git/gh 全局选项、fullscreen 分页
 - M1/M2/M3/M4/M5 修复：移除超线性正则、继承 shell 前缀、拦截 user_bash、bidi 清洗、影子注册自检
 - L1/L3/L4/L6 修复：关闭清理指纹、maxCommandLines 兜底、分页键位、配置 clamp
-- 64 个测试；真实 TUI/fullscreen/user_bash/RPC/子代理验证
+- 66 个测试；真实 TUI/fullscreen/user_bash/RPC/子代理验证
 
 ## 0.1.0
 

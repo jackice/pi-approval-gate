@@ -2,7 +2,7 @@
 
 Pi 的危险 bash 审批 Gate。通过替换受支持的 `bash` 执行边界，把审批绑定到最终 `command`/`cwd`，避免 `tool_call` 之后参数被改写。
 
-- 基线：Pi `1.6.0`、`@jackice/pi-ui` `0.4.1`
+- 基线：Pi `1.6.0`、`@jackice/pi-ui` `0.4.2`
 - 默认拒绝：TUI 以外、无 UI、子代理、超时、abort、reload/shutdown
 - 不修改原生 Pi 源码；使用 `registerTool` 覆盖 `bash`
 - 策略使用线性 quote-aware 分词与递归解析；无法解析时 fail-closed
@@ -16,7 +16,7 @@ Pi 的危险 bash 审批 Gate。通过替换受支持的 `bash` 执行边界，�
 4. 指纹不匹配（命令或 cwd 被改写）→ 抛错，零副作用。
 5. 安全命令直接透传，无需审批。
 6. `user_bash`（`!`）危险命令走同一审批；操作 exec 前消费指纹。
-7. 其他扩展先注册 `bash` 时，宿主直接报冲突；Gate 也会在 `session_start` 自检并阻断。
+7. Gate 用真实路径确认活动 `bash` 的注册来源；无法确认来源时阻断。Pi 1.6.0 会拒绝重复注册 `bash`。
 
 ## 配置
 

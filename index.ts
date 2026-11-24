@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -103,10 +103,10 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", (_event, ctx) => {
     const active = pi.getAllTools().find((tool) => tool.name === "bash");
-    shadowed = active === undefined || resolve(active.sourceInfo.path) !== resolve(selfPath);
+    shadowed = active === undefined || !sameSourceFile(active.sourceInfo.path, selfPath);
     if (shadowed && ctx.hasUI) {
       ctx.ui.notify(
-        "approval gate is not active: another extension registered bash first; bash is blocked",
+        "approval gate is not active: could not verify the registered bash source; bash is blocked",
         "error",
       );
     }
@@ -168,6 +168,14 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", () => gate.cancelAll());
+}
+
+function sameSourceFile(actual: string, expected: string): boolean {
+  try {
+    return realpathSync(actual) === realpathSync(expected);
+  } catch {
+    return false;
+  }
 }
 
 interface ShellSettings {
