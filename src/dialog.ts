@@ -2,10 +2,12 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { ApprovalView, fromPiTheme } from "@jackice/pi-ui";
 
 import type { ApprovalRequest, PromptChoice, PromptHandle } from "./gate.ts";
+import { createNativeApprovalView } from "./native-dialog.ts";
 
 export interface ApprovalPromptOptions {
   armMs: number;
   maxCommandLines?: number;
+  ui?: "native";
 }
 
 export function createApprovalPrompt(
@@ -30,17 +32,19 @@ export function createApprovalPrompt(
   const custom = ctx.ui.custom<PromptChoice>(
     (tui, theme: Theme, keybindings, done) => {
       doneFn = done;
-      const view = new ApprovalView(fromPiTheme(theme), {
-        request: {
-          toolName: request.toolName,
-          command: request.command,
-          cwd: request.cwd,
-          reason: request.reason,
-          risk: request.risk,
-        },
-        ...(options.maxCommandLines === undefined ? {} : { maxCommandLines: options.maxCommandLines }),
-      });
-      const started = Date.now();
+      const view = options.ui === "native"
+        ? createNativeApprovalView(request, tui, theme, options.maxCommandLines)
+        : new ApprovalView(fromPiTheme(theme), {
+            request: {
+              toolName: request.toolName,
+              command: request.command,
+              cwd: request.cwd,
+              reason: request.reason,
+              risk: request.risk,
+            },
+            ...(options.maxCommandLines === undefined ? {} : { maxCommandLines: options.maxCommandLines }),
+          });
+      const started = performance.now();
       return {
         capturesViewportInput: true,
         render: (width: number) => view.render(width),
@@ -51,7 +55,7 @@ export function createApprovalPrompt(
             tui.requestRender();
             return;
           }
-          if (choice === "allow_once" && Date.now() - started < options.armMs) {
+          if (choice === "allow_once" && performance.now() - started < options.armMs) {
             tui.requestRender();
             return;
           }

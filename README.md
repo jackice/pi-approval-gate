@@ -7,7 +7,7 @@ An approval extension for Pi's supported Bash execution paths. It binds user app
 - Registers a replacement `bash` tool through Pi's extension API. No Pi source changes are required.
 - Commands the policy cannot parse require approval.
 - Honors `shellCommandPrefix` and `shellPath` settings and shows the final command before execution.
-- Unreleased. The security re-review is still pending.
+- Unreleased. The independent review found execution-boundary blockers; do not install this candidate as a daily approval gate.
 
 ## How it works
 
@@ -24,11 +24,14 @@ An approval extension for Pi's supported Bash execution paths. It binds user app
 ```text
 --approval-timeout-ms <ms>   # Default: 120000; includes time spent in the queue.
 --approval-arm-ms <ms>       # Default: 500; minimum delay before allowing.
+--approval-ui native        # Use Pi's native selection list instead of the styled panel.
 PI_APPROVAL_TIMEOUT_MS
 PI_APPROVAL_ARM_MS
 ```
 
 Pi parses extension flags after loading the extension. Settings are read when each request is created.
+
+The native-list view starts on **Deny** and supports Page Up and Page Down for long commands. It uses the same approval gate, confirmation delay, and cancellation rules as the default panel.
 
 ## Verification
 
@@ -62,4 +65,4 @@ pnpm test
 - This is not a sandbox. It covers only the supported Bash paths, not `pi.exec`, `write`, `edit`, MCP, or `powershell`.
 - The dialog does not show an arming countdown. Pressing Enter before the delay expires provides no feedback.
 - Approval decisions are not stored in an audit log.
-- Low-severity findings remain, and the security re-review has not concluded. See [the review notes](docs/security-review.md).
+- The [review notes](docs/security-review.md) list the unresolved execution-boundary and release blockers.

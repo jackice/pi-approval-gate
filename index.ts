@@ -28,6 +28,16 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
     description: "Confirmation arm delay for Allow once",
     type: "string",
   });
+  pi.registerFlag("approval-ui", {
+    description: "Approval dialog style (panel or native)",
+    type: "string",
+  });
+
+  const promptOptions = () => ({
+    armMs: numberFlag(pi, "approval-arm-ms", "PI_APPROVAL_ARM_MS", DEFAULT_ARM_MS),
+    maxCommandLines: MAX_COMMAND_LINES,
+    ...(pi.getFlag("approval-ui") === "native" ? { ui: "native" as const } : {}),
+  });
 
   const timeoutMs = () =>
     numberFlag(pi, "approval-timeout-ms", "PI_APPROVAL_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
@@ -70,11 +80,7 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
         },
         {
           ...(signal === undefined ? {} : { signal }),
-          prompt: (request) =>
-            createApprovalPrompt(request, ctx, {
-              armMs: numberFlag(pi, "approval-arm-ms", "PI_APPROVAL_ARM_MS", DEFAULT_ARM_MS),
-              maxCommandLines: MAX_COMMAND_LINES,
-            }),
+          prompt: (request) => createApprovalPrompt(request, ctx, promptOptions()),
         },
       );
 
@@ -131,11 +137,7 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
         risk: "high",
       },
       {
-        prompt: (request) =>
-          createApprovalPrompt(request, ctx, {
-            armMs: numberFlag(pi, "approval-arm-ms", "PI_APPROVAL_ARM_MS", DEFAULT_ARM_MS),
-            maxCommandLines: MAX_COMMAND_LINES,
-          }),
+        prompt: (request) => createApprovalPrompt(request, ctx, promptOptions()),
       },
     );
     if (decision !== "allow_once") {

@@ -20,11 +20,13 @@ const theme = {
   bold: (text: string) => text,
 } as unknown as Theme;
 
-const tui = { requestRender: vi.fn() } as unknown as TUI;
+const tui = { requestRender: vi.fn(), terminal: { rows: 24 } } as unknown as TUI;
 const keybindings = {
   matches(data: string, binding: string) {
     return (
       (binding === "tui.select.up" && data === "\x1b[A") ||
+      (binding === "tui.select.down" && data === "\x1b[B") ||
+      (binding === "tui.select.pageDown" && data === "\x1b[6~") ||
       (binding === "tui.select.confirm" && data === "\r") ||
       (binding === "tui.select.cancel" && data === "\x1b")
     );
@@ -89,6 +91,38 @@ describe("createApprovalPrompt", () => {
     vi.advanceTimersByTime(500);
     component.handleInput("\r");
     expect(done).toHaveBeenCalledWith("allow_once");
+    await expect(prompt.promise).resolves.toBe("allow_once");
+  });
+
+  it("uses the native selector with Deny selected by default", async () => {
+    const ui = new FakeUi();
+    const prompt = createApprovalPrompt(request, context("tui", ui), { armMs: 0, ui: "native" });
+    if (ui.factory === undefined) throw new Error("factory not registered");
+    const component = ui.factory(tui, theme, keybindings, ui.resolve!) as { render(width: number): string[]; handleInput(data: string): void };
+    expect(component.render(60).join("\n")).toContain("Native approval");
+    component.handleInput("\r");
+    await expect(prompt.promise).resolves.toBe("deny");
+  });
+
+  it("keeps the native selector armed and lets long command text be inspected", async () => {
+    vi.useFakeTimers();
+    const ui = new FakeUi();
+    const prompt = createApprovalPrompt({ ...request, command: "line one\nline two\n\x1b[2Jline three" }, context("tui", ui), {
+      armMs: 500, maxCommandLines: 2, ui: "native",
+    });
+    if (ui.factory === undefined) throw new Error("factory not registered");
+    const done = vi.fn();
+    const component = ui.factory(tui, theme, keybindings, done) as { render(width: number): string[]; handleInput(data: string): void };
+    expect(component.render(52).join("\n")).not.toContain("line three");
+    for (let i = 0; i < 4; i++) component.handleInput("\x1b[6~");
+    const page = component.render(52).join("\n");
+    expect(page).toContain("\\u001b[2Jline three");
+    expect(page).not.toContain("\x1b[2J");
+    component.handleInput("\x1b[B");
+    component.handleInput("\r");
+    expect(done).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(500);
+    component.handleInput("\r");
     await expect(prompt.promise).resolves.toBe("allow_once");
   });
 

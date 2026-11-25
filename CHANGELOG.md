@@ -2,6 +2,7 @@
 
 ## 0.1.1
 
+- 新增 `--approval-ui native`：用 Pi 原生选择列表回滚新版面板，保留默认拒绝、确认延迟和 Gate 决策。
 - 将 `@jackice/pi-ui` 固定为运行时依赖；Pi 省略 peer 安装时仍能加载候选扩展。
 - 按真实文件路径验证 `bash` 注册来源，避免符号链接安装误阻断自身工具；无法确认来源时仍拒绝。
 - 安全评审 C1/H1/H2/H3 修复：线性 quote-aware 策略、包装命令递归、fail-closed、git/gh 全局选项、fullscreen 分页
