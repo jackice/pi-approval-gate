@@ -22,6 +22,7 @@ export function createApprovalPrompt(
   const { promise, resolve } = Promise.withResolvers<PromptChoice>();
   let finished = false;
   let doneFn: ((choice: PromptChoice) => void) | undefined;
+  let nativeView: ReturnType<typeof createNativeApprovalView> | undefined;
 
   const finish = (choice: PromptChoice): void => {
     if (finished) return;
@@ -33,7 +34,7 @@ export function createApprovalPrompt(
     (tui, theme: Theme, keybindings, done) => {
       doneFn = done;
       const view = options.ui === "native"
-        ? createNativeApprovalView(request, tui, theme, options.maxCommandLines)
+        ? (nativeView = createNativeApprovalView(request, tui, theme, options.maxCommandLines))
         : new ApprovalView(fromPiTheme(theme), {
             request: {
               toolName: request.toolName,
@@ -65,7 +66,14 @@ export function createApprovalPrompt(
         invalidate: () => view.invalidate(),
       };
     },
-    { blocked: { kind: "permission", message: "bash approval" } },
+    {
+      blocked: { kind: "permission", message: "bash approval" },
+      ...(options.ui === "native" ? {
+        overlay: true,
+        overlayOptions: { width: "90%", maxHeight: "90%", margin: 1 },
+        onHandle: (handle) => nativeView?.setOverlayHandle(handle),
+      } : {}),
+    },
   );
 
   custom.then(

@@ -1,7 +1,8 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import type { TUI } from "@earendil-works/pi-tui";
+import { visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { createNativeApprovalView } from "../src/native-dialog.ts";
 import { createApprovalPrompt } from "../src/dialog.ts";
 import type { ApprovalRequest } from "../src/gate.ts";
 
@@ -22,7 +23,7 @@ const theme = {
   bold: (text: string) => text,
 } as unknown as Theme;
 
-const tui = { requestRender: vi.fn(), terminal: { rows: 24 } } as unknown as TUI;
+const tui = { requestRender: vi.fn(), terminal: { rows: 24, columns: 80 } } as unknown as TUI;
 const keybindings = {
   matches(data: string, binding: string) {
     return (
@@ -36,14 +37,16 @@ const keybindings = {
 };
 
 class FakeUi {
-  custom = vi.fn((factory: (tui: TUI, theme: Theme, kb: unknown, done: (choice: string) => void) => unknown) => {
+  custom = vi.fn((factory: (tui: TUI, theme: Theme, kb: unknown, done: (choice: string) => void) => unknown, options?: unknown) => {
     const { promise, resolve } = Promise.withResolvers<string>();
     this.factory = factory;
     this.resolve = resolve;
+    this.options = options;
     return promise;
   });
   factory: ((tui: TUI, theme: Theme, kb: unknown, done: (choice: string) => void) => unknown) | undefined;
   resolve: ((choice: string) => void) | undefined;
+  options: unknown;
   notify = vi.fn();
   setWidget = vi.fn();
 }
@@ -51,6 +54,65 @@ class FakeUi {
 function context(mode: ExtensionContext["mode"], ui: FakeUi): ExtensionContext {
   return { mode, hasUI: true, ui } as unknown as ExtensionContext;
 }
+
+function setNativeBounds(ui: FakeUi, width = 52, height = 24): void {
+  const options = ui.options as { onHandle?: (handle: unknown) => void } | undefined;
+  options?.onHandle?.({
+    getBounds: () => ({ row: 0, col: 0, width, height }),
+  });
+}
+
+
+describe("createNativeApprovalView", () => {
+  it("preserves soft-wrap whitespace and visibly encodes command newlines", () => {
+    const view = createNativeApprovalView({ ...request, command: "rm  target\nnext" }, tui, theme, 8);
+    const lines = view.render(12);
+    const output = lines.join("").replaceAll(">", "");
+
+    expect(output).toContain("rm  target\\nnext");
+    expect(lines.every((line) => visibleWidth(line) <= 12)).toBe(true);
+    expect(lines.some((line) => line.endsWith(">"))).toBe(true);
+  });
+
+  it("escapes invisible Unicode code points including supplementary variation selectors", () => {
+    const command = "a\u00adb\u2066c\u{e0100}de\u0301\ud800";
+    const view = createNativeApprovalView({ ...request, command }, tui, theme, 8);
+    const output = view.render(60).join("\n");
+
+    expect(output).not.toContain(command);
+    expect(output).toContain("\\u{ad}");
+    expect(output).toContain("\\u{2066}");
+    expect(output).toContain("\\u{e0100}");
+    expect(output).toContain("e\u0301");
+    expect(output).toContain("\\u{d800}");
+  });
+
+  it("requires a current overlay bound containing every approval row", () => {
+    const nativeTui = {
+      requestRender: vi.fn(),
+      mode: "regular",
+      terminal: { rows: 24, columns: 80 },
+    } as unknown as TUI;
+    const view = createNativeApprovalView(request, nativeTui, theme, 8);
+    const bounds = { row: 0, col: 0, width: 52, height: 1 };
+    view.setOverlayHandle({ getBounds: () => bounds } as never);
+    const rows = view.render(52);
+    view.handleInput("\x1b[B", keybindings as never);
+
+    expect(view.handleInput("\r", keybindings as never)).toBe("deny");
+    bounds.height = rows.length;
+    view.render(52);
+    expect(view.handleInput("\r", keybindings as never)).toBe("allow_once");
+  });
+  it("keeps risk and pagination status visible in a narrow approval view", () => {
+    const view = createNativeApprovalView(request, tui, theme, 8);
+    const rows = view.render(8);
+
+    expect(rows[1]).toBe("Risk: H");
+    expect(rows[2]).toBe("1-7/7");
+  });
+
+});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -101,7 +163,7 @@ describe("createApprovalPrompt", () => {
     const prompt = createApprovalPrompt(request, context("tui", ui), { armMs: 0, ui: "native" });
     if (ui.factory === undefined) throw new Error("factory not registered");
     const component = ui.factory(tui, theme, keybindings, ui.resolve!) as { render(width: number): string[]; handleInput(data: string): void };
-    expect(component.render(60).join("\n")).toContain("Native approval");
+    expect(component.render(60).join("\n")).toContain("Bash approval");
     component.handleInput("\r");
     await expect(prompt.promise).resolves.toBe("deny");
   });
@@ -114,12 +176,12 @@ describe("createApprovalPrompt", () => {
     });
     if (ui.factory === undefined) throw new Error("factory not registered");
     const done = vi.fn();
-    const component = ui.factory(tui, theme, keybindings, done) as { render(width: number): string[]; handleInput(data: string): void };
+    const component = ui.factory(tui, theme, keybindings, done) as { render(width: number): readonly string[]; handleInput(data: string): void };
+    setNativeBounds(ui);
     expect(component.render(52).join("\n")).not.toContain("line three");
     for (let i = 0; i < 4; i++) component.handleInput("\x1b[6~");
     const page = component.render(52).join("\n");
-    expect(page).toContain("\\u001b[2Jline three");
-    expect(page).not.toContain("\x1b[2J");
+    expect(page).toContain("\\u{1b}[2Jline three");
     component.handleInput("\x1b[B");
     component.handleInput("\r");
     expect(done).not.toHaveBeenCalled();
