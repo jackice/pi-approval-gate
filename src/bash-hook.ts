@@ -4,7 +4,7 @@ import { verifyFinalBinding } from "./binding.ts";
 import type { ApprovalAuthorization, ApprovalRequest } from "./gate.ts";
 
 export interface BashGuardOptions {
-  /** 返回拦截说明时阻止执行；在消费审批之前运行。 */
+  /** Returns a message to block the command; runs before the approval is consumed. */
   guard?: ((command: string) => string | undefined) | undefined;
   authorization?: ApprovalAuthorization | undefined;
   request?: ApprovalRequest | undefined;
@@ -12,7 +12,7 @@ export interface BashGuardOptions {
 }
 
 /**
- * 组合命令拦截与最终审批绑定，供 Bash 工具的 spawn hook 使用。
+ * Combines the command guard with final approval binding for a Bash spawn hook.
  */
 export function createBashSpawnHook(options: BashGuardOptions): BashSpawnHook {
   return (context: BashSpawnContext): BashSpawnContext => {

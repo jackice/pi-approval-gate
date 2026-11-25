@@ -65,8 +65,8 @@ export function fingerprint(command: string, cwd: string): string {
 }
 
 /**
- * 单写者审批队列。超时/abort/shutdown 都走同一幂等 settle 路径，
- * 不依赖 custom<T> 的 Promise 结算。
+ * Single-writer approval queue. Timeout, abort, and shutdown share one idempotent
+ * settle path and never depend on the custom<T> promise settling.
  */
 export class ApprovalGate {
   private readonly timeoutMs: number | (() => number);
@@ -204,7 +204,7 @@ export class ApprovalGate {
     try {
       entry.cancelPrompt?.();
     } catch {
-      // 宿主组件可能已销毁；结算不依赖关闭 UI。
+      // The host component may be gone; settling must not depend on closing the UI.
     }
     if (this.active === entry) this.active = undefined;
     const index = this.queue.indexOf(entry);

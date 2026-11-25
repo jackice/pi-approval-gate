@@ -1,73 +1,73 @@
-# 安全评审与修复记录
+# Security Review and Fix Log
 
-- 日期：2026-11-24
-- 范围：`pi-approval-gate`、`pi-ui/src/views/approval.ts`、`pi-ui/src/core/ansi.ts`
-- 基线：Pi `1.6.0`
-- 评审方式：独立只读安全评审 + 本地回归测试 + 真实 TUI/RPC/headless 探针
+- Date: 2026-11-24
+- Scope: `pi-approval-gate`, `pi-ui/src/views/approval.ts`, `pi-ui/src/core/ansi.ts`
+- Baseline: Pi `1.6.0`
+- Method: independent read-only security review, local regression tests, and real TUI/RPC/headless probes
 
-## 已修复
+## Fixed
 
-| 编号 | 级别 | 问题 | 修复 |
+| ID | Severity | Issue | Fix |
 |---|---|---|---|
-| C1 | Critical | `sh -c`、`bash -lc`、`eval`、`xargs`、`find -exec`、引号拼接、`${IFS}` 可绕过 `rm` 判定 | 重写为线性 quote-aware 分词 + 递归解析包装命令；展开/重定向/未闭合引号 fail-closed |
-| H1 | High | `git -C … push`、`--no-pager`、`-c …` 绕过 | 解析 git 全局选项后取子命令 |
-| H2 | High | `git reset --hard`、`clean`、`branch -D`、`find -delete`、`dd`、`truncate`、`chmod`、`kill`、`curl \| sh`、解释器、`npm publish`、`docker rm`、`mv /dev` 等未覆盖 | 扩充危险动作；解释器、`source`、`xargs` 等 fail-closed |
-| H3 | High | fullscreen 下 PgUp/PgDn 被 transcript 抢占，长命令尾部不可查看 | 组件声明 `capturesViewportInput`；支持 `tui.select.pageUp/pageDown`；真机验证尾部可见 |
-| M1 | Medium | `hasRmInvocation` 正则超线性回溯，5KB 输入可卡住主线程 | 删除嵌套量词正则，改线性分词；8KB 上限；性能回归 <50ms |
-| M2 | Medium | 静默丢失 `shellCommandPrefix`/`shellPath` | 读取 `pi.getSettings()` 并传给内层 bash；审批展示 prefix+command，指纹绑定最终字符串 |
-| M3 | Medium | `user_bash`（`!`）绕过审批 | 拦截 `user_bash`，走同一 Gate + 操作级指纹；deny/allow 真机验证 |
-| M4 | Medium | bidi/零宽字符可伪装命令 | `sanitizeText` 移除 U+200B–200F、U+202A–202E、U+2060、U+2066–2069、U+FEFF |
-| M5 | Medium | 其他扩展先注册 `bash` 导致静默旁路 | 宿主对重复 `bash` 注册直接报错；Gate 另有 session_start 自检与 `tool_call` 阻断 |
-| M6 | Medium | 无害命令误报（审批疲劳） | 只在命令位置匹配；`grep/echo/man` 参数不触发 |
-| L1 | Low | `cancelAll` 不清指纹 | 关闭状态拒绝新请求并清空 tokens |
-| L3 | Low | `maxCommandLines` 非有限值导致命令不可见 | `Number.isFinite` 兜底 |
-| L4 | Low | 分页键不尊重 keybinding | 同时匹配 `tui.select.pageUp/pageDown` |
-| L6 | Low | 超大/0 超时导致立即拒绝 | clamp 到 `[1, 2^31-1]` |
+| C1 | Critical | `sh -c`, `bash -lc`, `eval`, `xargs`, `find -exec`, quote splicing, and `${IFS}` could bypass the `rm` check | Rewrote as a linear quote-aware tokenizer plus recursive wrapper parsing; expansion, redirection, and unclosed quotes fail closed |
+| H1 | High | `git -C … push`, `--no-pager`, `-c …` bypassed the check | Parse git global options before the subcommand |
+| H2 | High | Uncovered `git reset --hard`, `clean`, `branch -D`, `find -delete`, `dd`, `truncate`, `chmod`, `kill`, `curl \| sh`, interpreters, `npm publish`, `docker rm`, `mv /dev` | Extended the danger set; interpreters, `source`, and `xargs` fail closed |
+| H3 | High | In fullscreen, PgUp/PgDn went to the transcript and the tail of a long command stayed hidden | The component declares `capturesViewportInput` and honors `tui.select.pageUp/pageDown`; the tail was verified in a real session |
+| M1 | Medium | The `hasRmInvocation` regex backtracked superlinearly; 5KB of input could stall the main thread | Removed the nested quantifiers, switched to linear tokenizing, capped input at 8KB, and kept the perf regression under 50ms |
+| M2 | Medium | `shellCommandPrefix`/`shellPath` were silently dropped | Read `pi.getSettings()` and pass it to the inner bash; the dialog shows prefix+command and the fingerprint binds the final string |
+| M3 | Medium | `user_bash` (`!`) bypassed approval | Intercept `user_bash` through the same Gate and per-operation fingerprint; deny/allow verified in a real session |
+| M4 | Medium | Bidi and zero-width characters could disguise a command | `sanitizeText` strips U+200B–200F, U+202A–202E, U+2060, U+2066–2069, U+FEFF |
+| M5 | Medium | Another extension registering `bash` first caused a silent bypass | Pi rejects duplicate `bash` registrations; the Gate also self-checks on `session_start` and blocks in `tool_call` |
+| M6 | Medium | Harmless commands were flagged, causing approval fatigue | Match only in command position; `grep/echo/man` arguments do not trigger |
+| L1 | Low | `cancelAll` did not clear fingerprints | A closed gate rejects new requests and clears tokens |
+| L3 | Low | A non-finite `maxCommandLines` could hide the command | `Number.isFinite` fallback |
+| L4 | Low | Paging keys ignored keybindings | Also match `tui.select.pageUp/pageDown` |
+| L6 | Low | Huge or zero timeouts rejected immediately | Clamp to `[1, 2^31-1]` |
 
-## 仍未处理
+## Open
 
-| 编号 | 级别 | 说明 |
+| ID | Severity | Notes |
 |---|---|---|
-| L2 | Low | arm 倒计时未在对话框显示；arm 内 Enter 静默无反馈 |
-| L8 | Low | 审批无持久审计 entry |
-| — | — | 可信 RPC 审批通道未接入，RPC 危险命令默认拒绝 |
-| — | — | `pi.exec`、其他工具面（write/edit/MCP/powershell）不在 bash Gate 范围 |
-| R2 | High | 已实现 request/session/tool-call/command/cwd 绑定、一次消费、原请求截止时间和取消撤销；但 SDK 操作层在消费后仍会异步检查 cwd，尚不能证明授权消费与进程启动原子衔接。 |
-| R3 | High | Pi 1.6.0 `createLocalShellOperations` 先检查 `signal.aborted`，再 `await fsAccess(cwd)`，之后才 `spawn`；异步间隔内取消仍可能启动命令。手工 Bash 等待 Gate 时也没有可传入 `user_bash` handler 的 AbortSignal。 |
-| R4 | Medium | 默认面板需要与原生列表一样支持完整 cwd 和可见控制字符转义。 |
-| R5 | High | 原生列表的自动折行会丢失边界空白，无法区分软折行和实际换行；审批预览必须无损呈现两者。 |
-| R6 | High | fullscreen 的输入区可独立于终端缩小，组件尾部可能被裁掉；不能以终端行列数证明选项和预览实际可见。 |
-| R7 | High | 控制字符转义未覆盖所有不可见 Unicode 类别；必须可见地呈现原始内容，不能静默丢失或隐藏。 |
-| R8 | Medium | 窄屏可能截掉风险和分页信息；关键信息不可见时只能拒绝。 |
-| — | 阻断发布 | 独立执行边界复审与界面复审均未通过；不能接入日常配置。 |
-| — | 待验收 | 基础原生列表 PTY 探针通过，不覆盖窄窗与 dock 裁剪；实际会话切换、重载和最终执行边界尚未通过。 |
+| L2 | Low | The dialog shows no arming countdown; Enter during the arm window gives no feedback |
+| L8 | Low | Approval decisions are not stored in a persistent audit entry |
+| — | — | No trusted RPC approval channel; dangerous RPC commands are denied by default |
+| — | — | `pi.exec` and the other tool surfaces (write/edit/MCP/powershell) are outside the bash Gate |
+| R2 | High | Binding covers request/session/tool-call/command/cwd, single consumption, the original deadline, and revocation, but the SDK operations layer still checks `cwd` asynchronously after consumption, so authorization and process start are not provably atomic. |
+| R3 | High | Pi 1.6.0 `createLocalShellOperations` checks `signal.aborted`, then `await fsAccess(cwd)`, and only then calls `spawn`; a cancellation inside that gap can still start the command. Manual Bash waiting on the Gate also has no AbortSignal to pass into the `user_bash` handler. |
+| R4 | Medium | The styled panel still lacks the native list's full cwd rendering and control-character escaping. |
+| R5 | High | The native list's auto-wrap dropped boundary whitespace, so soft wraps were indistinguishable from real newlines; the preview must preserve both. |
+| R6 | High | The fullscreen input area can shrink independently of the terminal, so the component tail can be clipped; terminal rows and columns cannot prove the options and preview are visible. |
+| R7 | High | Control-character escaping missed some invisible Unicode classes; the raw content must be shown visibly instead of silently dropped or hidden. |
+| R8 | Medium | Narrow screens could clip risk and paging status; when key information is invisible the only correct answer is denial. |
+| — | Release blocker (superseded) | The independent execution-boundary and interface reviews both failed at the time; see the 2026-11-25 update. |
+| — | Pending acceptance | The basic native-list PTY probe passes but does not cover narrow windows or dock clipping; real session switches, reloads, and the final execution boundary were not covered. |
 
-## 回归
+## Regression
 
-- `pi-approval-gate`：84 个测试通过（含精确请求绑定、安全改写拒绝、过期与取消撤销回归）。
-- 新候选按 `npm install --omit=peer` 隔离安装并在 Pi 1.6.0 启动，`pi-ui@0.4.2` 从运行时依赖解析，Pi TUI 由宿主提供。未执行 Bash 命令。
-- 原生 `confirm()` 的无副作用 PTY 探针：默认选中 `Yes`，立即按 Enter 返回批准；`AbortSignal` 会关闭对话框并返回拒绝。取消能力不能替代默认拒绝与防误触。
-- 新候选的真实 Pi 1.6.0 PTY 探针使用真实 Gate 和惰性文本：默认 Enter 拒绝、arm 后允许一次、改变宽度后 Page Down 到末行、Esc、AbortSignal、超时均通过，等待者归零；未执行命令。
+- `pi-approval-gate`: 84 tests pass, including exact request binding, refusal of unsafe rewrites, and expiry/cancel revocation regressions.
+- The new candidate was installed in isolation with `npm install --omit=peer` and started on Pi 1.6.0; `pi-ui@0.4.2` resolved from the runtime dependency and Pi supplied the TUI. No Bash command was executed.
+- Side-effect-free PTY probe of the native `confirm()`: `Yes` is selected by default and an immediate Enter returns approval; an `AbortSignal` closes the dialog and returns denial. Cancellation cannot replace default-deny and arm protection.
+- PTY probe of the new candidate on real Pi 1.6.0 with the real Gate and lazy text: default Enter denies, allow works once after arming, Page Down reaches the last line after a width change, and Esc, AbortSignal, and timeout all pass with waiters back to zero; no command ran.
 
-补充核验：Pi 1.6.0 的 `wrapTextWithAnsi` 会裁掉空白，16 列标题可丢失风险等级，补充平面的 variation selector 占零列；fullscreen 的 `chat-viewport.js` 将确认组件放入可收缩的输入容器。后续应先验证宿主能否提供实际可见范围与焦点，再做无损预览和缩放期间拒绝的回归；不能确认可见性时不开放批准。
+Additional check: Pi 1.6.0 `wrapTextWithAnsi` trims whitespace, a 16-column title can lose the risk level, supplementary-plane variation selectors consume zero columns, and fullscreen `chat-viewport.js` places the confirmation component inside a shrinkable input container. The next step was to verify that the host can supply the actual visible range and focus, then regress lossless previews and shrink-time denial; without confirmed visibility, approval stays closed.
 
-- 真机：
-  - 危险命令 deny / allow / timeout
-  - fullscreen 20 行命令 PgDn 后可见 `rm -rf target`
-  - `!rm -rf target` 审批 deny/allow
-  - `shellCommandPrefix` 生效
-  - 重复 bash 注册宿主报错
-  - RPC/headless/子代理默认拒绝
+- Real session:
+  - dangerous command deny / allow / timeout
+  - a 20-line command in fullscreen shows `rm -rf target` after PgDn
+  - `!rm -rf target` approval deny/allow
+  - `shellCommandPrefix` applied
+  - duplicate bash registration reported by the host
+  - RPC/headless/subagent deny by default
 
-## 2026-11-25 更新
+## 2026-11-25 update
 
-| 编号 | 状态 | 证据 |
+| ID | Status | Evidence |
 |---|---|---|
-| R5 | 已修复 | 折行时保留边界空格，软换行以 `>` 结尾；`tests/dialog.test.ts` 断言宽度与标记。 |
-| R6 | 部分 | 批准前要求当前 overlay 边界覆盖全部渲染行、列坐标与终端范围，否则只接受拒绝；fullscreen 缩窗后的边界值仍只由单元测试证明。 |
-| R7 | 已修复 | 转义 `Default_Ignorable`、`Control`、`Format`、`Surrogate`，保留组合记号；不可见码点可见呈现。 |
-| R8 | 已修复 | 窄屏依次退化为紧凑分页与风险字母，仍不可见时才拒绝批准。 |
-| R4 | 未处理 | 默认面板仍未与原生列表对齐完整 cwd 与控制字符转义。 |
-| R2 / R3 | 未处理 | 执行边界竞态仍在，依赖 Pi 提供 spawn 前同步钩子。 |
+| R5 | Fixed | Wrapping keeps boundary spaces and marks soft wraps with a trailing `>`; `tests/dialog.test.ts` asserts width and marker. |
+| R6 | Partial | Approval requires the current overlay bounds to cover every rendered row, the column range, and the terminal; otherwise only denial is accepted. Bounds after a fullscreen shrink are still proven only by unit tests. |
+| R7 | Fixed | Escapes `Default_Ignorable`, `Control`, `Format`, and `Surrogate` while keeping combining marks; invisible code points are shown visibly. |
+| R8 | Fixed | Narrow screens fall back to a compact page label and a risk letter; only when nothing fits does approval stay closed. |
+| R4 | Open | The styled panel still does not match the native list on full cwd rendering and control-character escaping. |
+| R2 / R3 | Open | The execution-boundary race remains and needs a synchronous pre-spawn hook from Pi. |
 
-整合（2026-11-25）：本机日常 Pi 的 `uv` 策略与审批合并为 `bash-guard.ts`，由它持有唯一 `bash` 注册；原生审批列表为默认 UI。真实 Pi 1.6.0 验证：`!pip install` 被 uv 提示拦截；`!rm -rf` 默认拒绝且文件保留，Down+Enter 允许后执行；模型 Bash 工具未被来源自检误阻断。
+Integration (2026-11-25): the optional `uv` guard now lives in this package (`--approval-guard uv` or `approvalGate.guard: "uv"`), the native list is the default UI, and this package is the only `bash` registrant. Verified on real Pi 1.6.0: `!pip install` is blocked with the uv hint, `!rm -rf` denies by default and keeps the file, and Down+Enter executes after approval. The model's Bash tool was not blocked by the source self-check.

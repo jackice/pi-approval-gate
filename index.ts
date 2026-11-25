@@ -49,7 +49,7 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
     ...(pi.getFlag("approval-ui") === "panel" ? {} : { ui: "native" as const }),
   });
 
-  /** 每次调用重新解析，flag 与 settings 都可能在扩展加载后才可读。 */
+  /** Resolved per call: flags and settings are only readable after the extension loads. */
   const commandGuard = (): CommandGuard | undefined => {
     if (pi.getFlag("approval-guard") === "uv") return uvGuard;
     const settings = pi.getSettings() as { approvalGate?: { guard?: unknown } } | undefined;

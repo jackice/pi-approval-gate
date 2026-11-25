@@ -32,7 +32,7 @@ const PY_COMPILE_MESSAGE = [
   "",
 ].join("\n");
 
-// 只在命令位置匹配（行首、换行、; && || | 之后），避免 grep/echo 参数误报。
+// Match only in command position (start, newline, after ; && || |) to avoid grep/echo arguments.
 const SEGMENT_PREFIX = String.raw`(?:^|\n|[;|&]{1,2})\s*(?:\S+\/)?`;
 
 const PIP_PATTERN = new RegExp(`${SEGMENT_PREFIX}pip\\s*(?:$|\\s)`, "m");
@@ -44,7 +44,7 @@ const PYTHON_VENV_PATTERN = new RegExp(`${PYTHON_PREFIX}(?:\\s-m\\s*venv\\b|\\s-
 const PYTHON_PY_COMPILE_PATTERN = new RegExp(`${PYTHON_PREFIX}(?:\\s-m\\s*py_compile\\b|\\s-mpy_compile\\b)`, "m");
 
 /**
- * 阻止被禁用的 Python 包管理命令，并提示 uv 等价写法。
+ * Blocks disabled Python package-manager commands and suggests the uv equivalent.
  */
 export function uvGuard(command: string): string | undefined {
   if (PIP_PATTERN.test(command)) return PIP_MESSAGE;

@@ -32,8 +32,8 @@ function basename(value: string): string {
 }
 
 /**
- * 线性、quote-aware 分词；遇到 shell 展开、重定向、未闭合引号时返回 undefined，
- * 调用方按危险命令处理（fail-closed）。
+ * Linear, quote-aware tokenizer. Shell expansion, redirection, or an unclosed quote
+ * returns undefined so callers fail closed and treat the command as dangerous.
  */
 function splitSegments(command: string): string[][] | undefined {
   const segments: string[][] = [];

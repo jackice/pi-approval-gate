@@ -89,7 +89,7 @@ export function createApprovalPrompt(
       try {
         doneFn?.("deny");
       } catch {
-        // 组件可能已因 reload/switch 被销毁。
+        // The host component may already be gone after a reload or session switch.
       }
     },
   };

@@ -4,8 +4,8 @@ import type { ApprovalAuthorization, ApprovalRequest } from "./gate.ts";
 import { isDangerousBash } from "./policy.ts";
 
 /**
- * 在真正 spawn 前校验最终 command/cwd。
- * 危险命令必须消费绑定到本次调用的一次性批准。
+ * Verifies the final command and working directory right before spawn.
+ * Dangerous commands must consume an approval bound to this exact call.
  */
 export function verifyFinalBinding(
   authorization: ApprovalAuthorization | undefined,
