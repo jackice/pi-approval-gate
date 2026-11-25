@@ -7,7 +7,7 @@ An approval extension for Pi's supported Bash execution paths. It binds user app
 - Registers a replacement `bash` tool through Pi's extension API. No Pi source changes are required.
 - Commands the policy cannot parse require approval.
 - Honors `shellCommandPrefix` and `shellPath` settings and shows the final command before execution.
-- Unreleased. The independent review found execution-boundary blockers; do not install this candidate as a daily approval gate.
+- Known limit: Pi `1.6.0` has no synchronous pre-spawn hook, so a cancellation in the gap between authorization and `spawn()` can still start the command. See the [review notes](docs/security-review.md). This is not a sandbox.
 
 ## How it works
 
