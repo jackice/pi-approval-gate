@@ -7,6 +7,8 @@ import type { ApprovalRequest } from "../src/gate.ts";
 
 const request: ApprovalRequest = {
   id: "req",
+  sessionId: "session-1",
+  toolCallId: "call-1",
   toolName: "bash",
   command: "rm -rf /tmp/x",
   cwd: "/tmp/work",

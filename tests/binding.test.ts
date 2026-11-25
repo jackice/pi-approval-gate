@@ -1,37 +1,88 @@
 import { describe, expect, it } from "vitest";
 
 import { verifyFinalBinding } from "../src/binding.ts";
-import { ApprovalGate } from "../src/gate.ts";
+import { ApprovalGate, type ApprovalRequest } from "../src/gate.ts";
 
 const env = {};
-const command = "rm -rf target";
+const request: Omit<ApprovalRequest, "id" | "fingerprint"> = {
+  sessionId: "session-1",
+  toolCallId: "call-1",
+  toolName: "bash",
+  command: "rm -rf target",
+  cwd: "/tmp/work",
+  reason: "removal",
+  risk: "high",
+};
+
+async function approved() {
+  const gate = new ApprovalGate({ timeoutMs: 1000, maxPending: 1 });
+  const { promise, resolve } = Promise.withResolvers<"allow_once" | "deny">();
+  const result = gate.request(request, {
+    prompt: () => ({ promise, cancel: () => {} }),
+  });
+  resolve("allow_once");
+  const outcome = await result;
+  return { authorization: outcome.authorization!, request: outcome.request };
+}
 
 describe("verifyFinalBinding", () => {
-  it("consumes an approved dangerous command exactly once", () => {
-    const gate = new ApprovalGate({ timeoutMs: 1000, maxPending: 1 });
-    gate.expect(command, "/tmp/work");
-    const context = verifyFinalBinding(gate, { command, cwd: "/tmp/work", env });
-    expect(context.command).toBe(command);
-    expect(() => verifyFinalBinding(gate, { command, cwd: "/tmp/work", env })).toThrow(
-      "approval binding mismatch",
-    );
+  it("consumes an approval for its exact execution request once", async () => {
+    const approvedCall = await approved();
+    const context = verifyFinalBinding(approvedCall.authorization, approvedCall.request, {
+      command: request.command,
+      cwd: request.cwd,
+      env,
+    });
+    expect(context.command).toBe(request.command);
+    expect(() => verifyFinalBinding(approvedCall.authorization, approvedCall.request, {
+      command: request.command,
+      cwd: request.cwd,
+      env,
+    })).toThrow("approval binding mismatch");
   });
 
-  it("rejects a mutated command or cwd", () => {
-    const gate = new ApprovalGate({ timeoutMs: 1000, maxPending: 1 });
-    gate.expect(command, "/tmp/work");
-    expect(() => verifyFinalBinding(gate, { command: "rm -rf other", cwd: "/tmp/work", env })).toThrow(
-      "approval binding mismatch",
-    );
-    expect(() => verifyFinalBinding(gate, { command, cwd: "/tmp/other", env })).toThrow(
-      "approval binding mismatch",
-    );
-    // 原批准仍可用于精确匹配的请求。
-    expect(() => verifyFinalBinding(gate, { command, cwd: "/tmp/work", env })).not.toThrow();
+  it("rejects a mutated command or cwd and consumes the grant", async () => {
+    const changedCommand = await approved();
+    expect(() => verifyFinalBinding(changedCommand.authorization, changedCommand.request, {
+      command: "rm -rf other",
+      cwd: request.cwd,
+      env,
+    })).toThrow("approval binding mismatch");
+
+    const changedCwd = await approved();
+    expect(() => verifyFinalBinding(changedCwd.authorization, changedCwd.request, {
+      command: request.command,
+      cwd: "/tmp/other",
+      env,
+    })).toThrow("approval binding mismatch");
   });
 
-  it("allows safe commands without a token", () => {
-    const gate = new ApprovalGate({ timeoutMs: 1000, maxPending: 1 });
-    expect(() => verifyFinalBinding(gate, { command: "echo hi", cwd: "/tmp/work", env })).not.toThrow();
+  it("rejects a changed command even when the replacement looks safe", async () => {
+    const changed = await approved();
+    expect(() => verifyFinalBinding(changed.authorization, changed.request, {
+      command: "echo harmless",
+      cwd: request.cwd,
+      env,
+    })).toThrow("approval binding mismatch");
+  });
+
+  it("allows safe commands without an authorization", () => {
+    expect(() => verifyFinalBinding(undefined, undefined, {
+      command: "echo hi",
+      cwd: "/tmp/work",
+      env,
+    })).not.toThrow();
+  });
+
+  it("rejects before binding when the execution signal is aborted", async () => {
+    const approvedCall = await approved();
+    const controller = new AbortController();
+    controller.abort();
+    expect(() => verifyFinalBinding(
+      approvedCall.authorization,
+      approvedCall.request,
+      { command: request.command, cwd: request.cwd, env },
+      controller.signal,
+    )).toThrow("aborted");
   });
 });

@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
@@ -11,7 +13,7 @@ import {
 
 import { createApprovalPrompt } from "./src/dialog.ts";
 import { verifyFinalBinding } from "./src/binding.ts";
-import { ApprovalGate } from "./src/gate.ts";
+import { ApprovalGate, type ApprovalAuthorization, type ApprovalRequest } from "./src/gate.ts";
 import { dangerReason } from "./src/policy.ts";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -45,10 +47,9 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
   const selfPath = fileURLToPath(import.meta.url);
   let shadowed = false;
 
-  const verify = (spawnContext: BashSpawnContext): BashSpawnContext =>
-    verifyFinalBinding(gate, spawnContext);
-
-  const template = createBashToolDefinition(process.cwd(), { spawnHook: verify });
+  const template = createBashToolDefinition(process.cwd(), {
+    spawnHook: (context) => verifyFinalBinding(undefined, undefined, context),
+  });
   pi.registerTool({
     ...template,
     executionMode: "sequential",
@@ -57,42 +58,46 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
       const cwd = ctx.cwd;
       const shell = shellSettings(pi);
       const finalCommand = shell.commandPrefix ? `${shell.commandPrefix}\n${command}` : command;
-      const options = bashOptions(shell, verify);
       const reason = dangerReason(finalCommand);
-
-      if (reason === undefined) {
-        return createBashToolDefinition(cwd, options).execute(
-          toolCallId,
-          { ...params, command },
-          signal,
-          onUpdate,
-          ctx,
+      let authorization: ApprovalAuthorization | undefined;
+      let approvalRequest: ApprovalRequest | undefined;
+      if (reason !== undefined) {
+        const approved = await gate.request(
+          {
+            sessionId: ctx.sessionManager.getSessionId(),
+            toolCallId,
+            toolName: "bash",
+            command: finalCommand,
+            cwd,
+            reason,
+            risk: "high",
+          },
+          {
+            ...(signal === undefined ? {} : { signal }),
+            prompt: (request) => createApprovalPrompt(request, ctx, promptOptions()),
+          },
         );
+        if (approved.decision !== "allow_once" || approved.authorization === undefined) {
+          return {
+            content: [{ type: "text", text: `Blocked by approval gate (${approved.decision}); command was not executed.` }],
+            isError: true,
+            details: undefined,
+          };
+        }
+        authorization = approved.authorization;
+        approvalRequest = approved.request;
+        if (signal?.aborted) {
+          authorization.revoke();
+          return {
+            content: [{ type: "text", text: "Blocked by approval gate (cancelled); command was not executed." }],
+            isError: true,
+            details: undefined,
+          };
+        }
       }
 
-      const decision = await gate.request(
-        {
-          toolName: "bash",
-          command: finalCommand,
-          cwd,
-          reason,
-          risk: "high",
-        },
-        {
-          ...(signal === undefined ? {} : { signal }),
-          prompt: (request) => createApprovalPrompt(request, ctx, promptOptions()),
-        },
-      );
-
-      if (decision !== "allow_once") {
-        return {
-          content: [{ type: "text", text: `Blocked by approval gate (${decision}); command was not executed.` }],
-          isError: true,
-          details: undefined,
-        };
-      }
-
-      gate.expect(finalCommand, cwd);
+      const options = bashOptions(shell, (context) =>
+        verifyFinalBinding(authorization, approvalRequest, context, signal));
       try {
         return await createBashToolDefinition(cwd, options).execute(
           toolCallId,
@@ -102,7 +107,7 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
           ctx,
         );
       } finally {
-        gate.clear(finalCommand, cwd);
+        authorization?.revoke();
       }
     },
   });
@@ -126,12 +131,16 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("user_bash", async (event, ctx) => {
-    const reason = dangerReason(event.command);
+    const shell = shellSettings(pi);
+    const command = shell.commandPrefix ? `${shell.commandPrefix}\n${event.command}` : event.command;
+    const reason = dangerReason(command);
     if (reason === undefined) return undefined;
-    const decision = await gate.request(
+    const approved = await gate.request(
       {
+        sessionId: ctx.sessionManager.getSessionId(),
+        toolCallId: randomUUID(),
         toolName: "user_bash",
-        command: event.command,
+        command,
         cwd: event.cwd,
         reason,
         risk: "high",
@@ -140,10 +149,10 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
         prompt: (request) => createApprovalPrompt(request, ctx, promptOptions()),
       },
     );
-    if (decision !== "allow_once") {
+    if (approved.decision !== "allow_once" || approved.authorization === undefined) {
       return {
         result: {
-          output: `Blocked by approval gate (${decision}); command was not executed.`,
+          output: `Blocked by approval gate (${approved.decision}); command was not executed.`,
           exitCode: 1,
           cancelled: true,
           truncated: false,
@@ -151,18 +160,17 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
       };
     }
 
-    gate.expect(event.command, event.cwd);
-    const local = createLocalBashOperations();
+    const authorization = approved.authorization;
+    const request = approved.request;
+    const local = createLocalBashOperations(shell.shellPath === undefined ? undefined : { shellPath: shell.shellPath });
     return {
       operations: {
         async exec(command: string, cwd: string, options: Parameters<typeof local.exec>[2]) {
           try {
-            if (!gate.consume(command, cwd)) {
-              throw new Error("approval binding mismatch: final command/cwd was not approved");
-            }
+            verifyFinalBinding(authorization, request, { command, cwd, env: options.env ?? process.env }, options.signal);
             return await local.exec(command, cwd, options);
           } finally {
-            gate.clear(command, cwd);
+            authorization.revoke();
           }
         },
       },

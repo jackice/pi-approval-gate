@@ -7,12 +7,33 @@ export type PromptChoice = "allow_once" | "deny";
 
 export interface ApprovalRequest {
   id: string;
+  sessionId: string;
+  toolCallId: string;
   toolName: string;
   command: string;
   cwd: string;
   reason: string;
   risk: ApprovalRisk;
   fingerprint: string;
+}
+
+export interface ApprovalBinding {
+  requestId: string;
+  sessionId: string;
+  toolCallId: string;
+  command: string;
+  cwd: string;
+}
+
+export interface ApprovalAuthorization {
+  consume(binding: ApprovalBinding): boolean;
+  revoke(): void;
+}
+
+export interface ApprovalResult {
+  decision: ApprovalDecision;
+  request: ApprovalRequest;
+  authorization?: ApprovalAuthorization;
 }
 
 export interface PromptHandle {
@@ -29,12 +50,14 @@ export interface GateOptions {
 interface QueuedRequest {
   request: ApprovalRequest;
   prompt: (request: ApprovalRequest) => PromptHandle;
-  resolve: (decision: ApprovalDecision) => void;
+  resolve: (result: ApprovalResult) => void;
   settled: boolean;
+  deadline: number;
   timer: NodeJS.Timeout;
   signal?: AbortSignal;
   onAbort?: () => void;
   cancelPrompt?: () => void;
+  authorization?: ApprovalAuthorization;
 }
 
 export function fingerprint(command: string, cwd: string): string {
@@ -50,8 +73,8 @@ export class ApprovalGate {
   private readonly maxPending: number;
   private readonly createId: () => string;
   private readonly queue: QueuedRequest[] = [];
+  private readonly authorizations = new Set<ApprovalAuthorization>();
   private active: QueuedRequest | undefined;
-  private readonly tokens = new Set<string>();
   private closed = false;
 
   constructor(options: GateOptions) {
@@ -63,10 +86,12 @@ export class ApprovalGate {
   request(
     request: Omit<ApprovalRequest, "id" | "fingerprint">,
     options: { signal?: AbortSignal; prompt: (request: ApprovalRequest) => PromptHandle },
-  ): Promise<ApprovalDecision> {
-    if (this.closed) return Promise.resolve("deny");
+  ): Promise<ApprovalResult> {
+    if (this.closed) return Promise.resolve({ decision: "deny", request: { ...request, id: "", fingerprint: "" } });
     const pending = this.queue.length + (this.active === undefined ? 0 : 1);
-    if (pending >= this.maxPending) return Promise.resolve("deny");
+    if (pending >= this.maxPending) {
+      return Promise.resolve({ decision: "deny", request: { ...request, id: "", fingerprint: "" } });
+    }
 
     const full: ApprovalRequest = {
       ...request,
@@ -74,18 +99,22 @@ export class ApprovalGate {
       fingerprint: fingerprint(request.command, request.cwd),
     };
     const timeoutMs = typeof this.timeoutMs === "function" ? this.timeoutMs() : this.timeoutMs;
-    const { promise, resolve } = Promise.withResolvers<ApprovalDecision>();
+    const { promise, resolve } = Promise.withResolvers<ApprovalResult>();
     const entry: QueuedRequest = {
       request: full,
       prompt: options.prompt,
       resolve,
       settled: false,
+      deadline: performance.now() + timeoutMs,
       timer: setTimeout(() => this.settle(entry, "timeout"), timeoutMs),
     };
     entry.timer.unref?.();
     if (options.signal !== undefined) {
       entry.signal = options.signal;
-      entry.onAbort = () => this.settle(entry, "cancelled");
+      entry.onAbort = () => {
+        if (entry.authorization !== undefined) entry.authorization.revoke();
+        else this.settle(entry, "cancelled");
+      };
       if (options.signal.aborted) {
         this.settle(entry, "cancelled");
         return promise;
@@ -97,27 +126,47 @@ export class ApprovalGate {
     return promise;
   }
 
-  expect(command: string, cwd: string): void {
-    this.tokens.add(fingerprint(command, cwd));
-  }
-
-  consume(command: string, cwd: string): boolean {
-    return this.tokens.delete(fingerprint(command, cwd));
-  }
-
-  clear(command: string, cwd: string): void {
-    this.tokens.delete(fingerprint(command, cwd));
-  }
-
   cancelAll(): void {
     this.closed = true;
-    this.tokens.clear();
+    for (const authorization of this.authorizations) authorization.revoke();
     const entries = this.active === undefined ? [...this.queue] : [this.active, ...this.queue];
     for (const entry of entries) this.settle(entry, "cancelled", false);
   }
 
   get pendingCount(): number {
     return this.queue.length + (this.active === undefined ? 0 : 1);
+  }
+
+  private createAuthorization(entry: QueuedRequest): ApprovalAuthorization {
+    let active = true;
+    const revoke = (): void => {
+      if (!active) return;
+      active = false;
+      clearTimeout(timer);
+      if (entry.signal !== undefined && entry.onAbort !== undefined) {
+        entry.signal.removeEventListener("abort", entry.onAbort);
+      }
+      this.authorizations.delete(authorization);
+    };
+    const authorization: ApprovalAuthorization = {
+      consume: (binding) => {
+        const valid = active
+          && !this.closed
+          && entry.signal?.aborted !== true
+          && performance.now() < entry.deadline
+          && binding.requestId === entry.request.id
+          && binding.sessionId === entry.request.sessionId
+          && binding.toolCallId === entry.request.toolCallId
+          && fingerprint(binding.command, binding.cwd) === entry.request.fingerprint;
+        revoke();
+        return valid;
+      },
+      revoke,
+    };
+    const timer = setTimeout(revoke, Math.max(0, entry.deadline - performance.now()));
+    timer.unref?.();
+    this.authorizations.add(authorization);
+    return authorization;
   }
 
   private pump(): void {
@@ -145,11 +194,13 @@ export class ApprovalGate {
 
   private settle(entry: QueuedRequest, decision: ApprovalDecision, pump = true): void {
     if (entry.settled) return;
+    if (decision === "allow_once") {
+      if (this.closed) decision = "cancelled";
+      else if (entry.signal?.aborted) decision = "cancelled";
+      else if (performance.now() >= entry.deadline) decision = "timeout";
+    }
     entry.settled = true;
     clearTimeout(entry.timer);
-    if (entry.signal !== undefined && entry.onAbort !== undefined) {
-      entry.signal.removeEventListener("abort", entry.onAbort);
-    }
     try {
       entry.cancelPrompt?.();
     } catch {
@@ -158,7 +209,17 @@ export class ApprovalGate {
     if (this.active === entry) this.active = undefined;
     const index = this.queue.indexOf(entry);
     if (index >= 0) this.queue.splice(index, 1);
-    entry.resolve(decision);
+    if (decision === "allow_once") {
+      entry.authorization = this.createAuthorization(entry);
+    } else if (entry.signal !== undefined && entry.onAbort !== undefined) {
+      entry.signal.removeEventListener("abort", entry.onAbort);
+    }
+    entry.resolve({
+      decision,
+      request: entry.request,
+      ...(entry.authorization === undefined ? {} : { authorization: entry.authorization }),
+    });
     if (pump) this.pump();
   }
 }
+

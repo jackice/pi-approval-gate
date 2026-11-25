@@ -32,9 +32,8 @@
 | L8 | Low | 审批无持久审计 entry |
 | — | — | 可信 RPC 审批通道未接入，RPC 危险命令默认拒绝 |
 | — | — | `pi.exec`、其他工具面（write/edit/MCP/powershell）不在 bash Gate 范围 |
-| R1 | High | 手工 Bash 需统一风险判定、展示与实际执行所使用的最终参数；当前前缀由宿主在稍后应用，不能证明一致。 |
-| R2 | High | 批准凭据需绑定具体请求与会话，并在启动前按原截止时间和取消状态原子消费；当前 `command + cwd` 集合不足。 |
-| R3 | High | Pi 1.6.0 Bash 执行器最后一次取消检查与实际启动之间有异步间隔；还需验证手工 Bash 待批取消能传递到底层。 |
+| R2 | High | 已实现 request/session/tool-call/command/cwd 绑定、一次消费、原请求截止时间和取消撤销；但 SDK 操作层在消费后仍会异步检查 cwd，尚不能证明授权消费与进程启动原子衔接。 |
+| R3 | High | Pi 1.6.0 `createLocalShellOperations` 先检查 `signal.aborted`，再 `await fsAccess(cwd)`，之后才 `spawn`；异步间隔内取消仍可能启动命令。手工 Bash 等待 Gate 时也没有可传入 `user_bash` handler 的 AbortSignal。 |
 | R4 | Medium | 默认面板需要与原生列表一样支持完整 cwd 和可见控制字符转义。 |
 | R5 | High | 原生列表的自动折行会丢失边界空白，无法区分软折行和实际换行；审批预览必须无损呈现两者。 |
 | R6 | High | fullscreen 的输入区可独立于终端缩小，组件尾部可能被裁掉；不能以终端行列数证明选项和预览实际可见。 |
@@ -45,8 +44,7 @@
 
 ## 回归
 
-- `pi-approval-gate`：66 个测试（新增两项注册来源检查）。
-- 候选 tarball 在 Pi 1.6.0 隔离共装验证：加载路径和工具来源路径指向同一文件时允许使用；缺失或不同来源仍阻断。启动探针没有执行审批，不能替代最终绑定与取消验证。
+- `pi-approval-gate`：73 个测试通过（含精确请求绑定、安全改写拒绝、过期与取消撤销回归）。
 - 新候选按 `npm install --omit=peer` 隔离安装并在 Pi 1.6.0 启动，`pi-ui@0.4.2` 从运行时依赖解析，Pi TUI 由宿主提供。未执行 Bash 命令。
 - 原生 `confirm()` 的无副作用 PTY 探针：默认选中 `Yes`，立即按 Enter 返回批准；`AbortSignal` 会关闭对话框并返回拒绝。取消能力不能替代默认拒绝与防误触。
 - 新候选的真实 Pi 1.6.0 PTY 探针使用真实 Gate 和惰性文本：默认 Enter 拒绝、arm 后允许一次、改变宽度后 Page Down 到末行、Esc、AbortSignal、超时均通过，等待者归零；未执行命令。
