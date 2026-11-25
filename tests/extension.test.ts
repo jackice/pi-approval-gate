@@ -47,26 +47,7 @@ it("blocks bash with a different or missing source file", () => {
   }
 });
 
-it("accepts the host extension path that actually registered bash", () => {
-  const handlers = new Map<string, Handler>();
-  const hostPath = fileURLToPath(import.meta.url);
-  const api = {
-    on(event: string, handler: Handler) { handlers.set(event, handler); },
-    registerFlag: vi.fn(),
-    registerTool: vi.fn(),
-    getFlag: () => undefined,
-    getSettings: () => ({}),
-    getAllTools: () => [{ name: "bash", sourceInfo: { path: hostPath } }],
-  } as unknown as ExtensionAPI;
-  const ctx = { hasUI: false } as ExtensionContext;
-
-  approvalGateExtension(api, { sourcePath: hostPath });
-  handlers.get("session_start")?.({}, ctx);
-
-  expect(handlers.get("tool_call")?.({ toolName: "bash" }, ctx)).toBeUndefined();
-});
-
-it("blocks guarded python tooling before opening the approval UI", async () => {
+it("blocks uv tooling when the uv guard is configured", async () => {
   const handlers = new Map<string, Handler>();
   const custom = vi.fn(() => new Promise<never>(() => {}));
   const api = {
@@ -74,7 +55,7 @@ it("blocks guarded python tooling before opening the approval UI", async () => {
     registerFlag: vi.fn(),
     registerTool: vi.fn(),
     getFlag: () => undefined,
-    getSettings: () => ({}),
+    getSettings: () => ({ approvalGate: { guard: "uv" } }),
   } as unknown as ExtensionAPI;
   const ctx = {
     mode: "tui",
@@ -84,15 +65,29 @@ it("blocks guarded python tooling before opening the approval UI", async () => {
     ui: { custom },
   } as unknown as ExtensionContext;
 
-  approvalGateExtension(api, {
-    guard: (command) => (command.includes("pip") ? "pip is disabled" : undefined),
-  });
-  const result = await handlers.get("user_bash")?.({ command: "pip install x", cwd: "/tmp" }, ctx);
+  approvalGateExtension(api);
+  const result = await handlers.get("user_bash")?.({ command: "pip install requests", cwd: "/tmp" }, ctx);
 
   expect(custom).not.toHaveBeenCalled();
-  expect(result).toMatchObject({
-    result: { output: "pip is disabled", exitCode: 1, cancelled: true },
-  });
+  expect(result).toMatchObject({ result: { exitCode: 1, cancelled: true } });
+  expect((result as { result: { output: string } }).result.output).toContain("pip is disabled");
+});
+
+it("allows python tooling when no guard is configured", async () => {
+  const handlers = new Map<string, Handler>();
+  const api = {
+    on(event: string, handler: Handler) { handlers.set(event, handler); },
+    registerFlag: vi.fn(),
+    registerTool: vi.fn(),
+    getFlag: () => undefined,
+    getSettings: () => ({}),
+  } as unknown as ExtensionAPI;
+  const ctx = { mode: "tui", hasUI: true, cwd: "/tmp", ui: {} } as unknown as ExtensionContext;
+
+  approvalGateExtension(api);
+
+  await expect(handlers.get("user_bash")?.({ command: "pip install requests", cwd: "/tmp" }, ctx))
+    .resolves.toBeUndefined();
 });
 
 it("uses the native approval view by default", async () => {

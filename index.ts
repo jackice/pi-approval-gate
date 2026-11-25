@@ -16,20 +16,16 @@ import { createBashSpawnHook } from "./src/bash-hook.ts";
 import { verifyFinalBinding } from "./src/binding.ts";
 import { ApprovalGate, type ApprovalAuthorization, type ApprovalRequest } from "./src/gate.ts";
 import { dangerReason } from "./src/policy.ts";
+import { uvGuard } from "./src/uv-guard.ts";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_ARM_MS = 500;
 const MAX_PENDING = 16;
 const MAX_COMMAND_LINES = 8;
 
-export interface ApprovalGateOptions {
-  /** 返回拦截说明时阻止执行；先于审批对话框。 */
-  guard?: ((command: string) => string | undefined) | undefined;
-  /** 实际注册 bash 的扩展文件路径；由其他扩展复用时必须传入。 */
-  sourcePath?: string | undefined;
-}
+type CommandGuard = (command: string) => string | undefined;
 
-export default function approvalGateExtension(pi: ExtensionAPI, config: ApprovalGateOptions = {}): void {
+export default function approvalGateExtension(pi: ExtensionAPI): void {
   pi.registerFlag("approval-timeout-ms", {
     description: "Pending bash approval timeout in milliseconds",
     type: "string",
@@ -42,6 +38,10 @@ export default function approvalGateExtension(pi: ExtensionAPI, config: Approval
     description: "Approval dialog style (native by default; panel optional)",
     type: "string",
   });
+  pi.registerFlag("approval-guard", {
+    description: "Command guard before approval (uv)",
+    type: "string",
+  });
 
   const promptOptions = () => ({
     armMs: numberFlag(pi, "approval-arm-ms", "PI_APPROVAL_ARM_MS", DEFAULT_ARM_MS),
@@ -49,10 +49,17 @@ export default function approvalGateExtension(pi: ExtensionAPI, config: Approval
     ...(pi.getFlag("approval-ui") === "panel" ? {} : { ui: "native" as const }),
   });
 
+  /** 每次调用重新解析，flag 与 settings 都可能在扩展加载后才可读。 */
+  const commandGuard = (): CommandGuard | undefined => {
+    if (pi.getFlag("approval-guard") === "uv") return uvGuard;
+    const settings = pi.getSettings() as { approvalGate?: { guard?: unknown } } | undefined;
+    return settings?.approvalGate?.guard === "uv" ? uvGuard : undefined;
+  };
+
   const timeoutMs = () =>
     numberFlag(pi, "approval-timeout-ms", "PI_APPROVAL_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
   const gate = new ApprovalGate({ timeoutMs, maxPending: MAX_PENDING });
-  const selfPath = config.sourcePath ?? fileURLToPath(import.meta.url);
+  const selfPath = fileURLToPath(import.meta.url);
   let shadowed = false;
 
   const template = createBashToolDefinition(process.cwd(), {
@@ -65,8 +72,9 @@ export default function approvalGateExtension(pi: ExtensionAPI, config: Approval
       const command = params.command;
       const cwd = ctx.cwd;
       const shell = shellSettings(pi);
+      const guard = commandGuard();
       const finalCommand = shell.commandPrefix ? `${shell.commandPrefix}\n${command}` : command;
-      const blocked = config.guard?.(finalCommand);
+      const blocked = guard?.(finalCommand);
       if (blocked !== undefined) {
         return {
           content: [{ type: "text", text: blocked }],
@@ -113,7 +121,7 @@ export default function approvalGateExtension(pi: ExtensionAPI, config: Approval
       }
 
       const options = bashOptions(shell, createBashSpawnHook({
-        guard: config.guard,
+        guard,
         authorization,
         request: approvalRequest,
         signal,
@@ -152,8 +160,9 @@ export default function approvalGateExtension(pi: ExtensionAPI, config: Approval
 
   pi.on("user_bash", async (event, ctx) => {
     const shell = shellSettings(pi);
+    const guard = commandGuard();
     const command = shell.commandPrefix ? `${shell.commandPrefix}\n${event.command}` : event.command;
-    const blocked = config.guard?.(command);
+    const blocked = guard?.(command);
     if (blocked !== undefined) {
       return {
         result: { output: blocked, exitCode: 1, cancelled: true, truncated: false },
@@ -189,7 +198,7 @@ export default function approvalGateExtension(pi: ExtensionAPI, config: Approval
       }
       authorization = approved.authorization;
       request = approved.request;
-    } else if (config.guard === undefined) {
+    } else if (guard === undefined) {
       return undefined;
     }
 
@@ -198,7 +207,7 @@ export default function approvalGateExtension(pi: ExtensionAPI, config: Approval
       operations: {
         async exec(command: string, cwd: string, options: Parameters<typeof local.exec>[2]) {
           const spawnHook = createBashSpawnHook({
-            guard: config.guard,
+            guard,
             authorization,
             request,
             signal: options.signal,

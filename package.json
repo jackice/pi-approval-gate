@@ -1,6 +1,6 @@
 {
   "name": "@jackice/pi-approval-gate",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Dangerous bash approval gate for Pi with final execution-parameter binding.",
   "type": "module",
   "license": "MIT",
