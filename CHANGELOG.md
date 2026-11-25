@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.6
+
+- Use a full-width rounded approval dialog with a warning heading and a highlighted selection.
+- Select Allow once by default. Enter still requires the confirmation delay, and Esc denies immediately.
+
 ## 0.1.5
 
 - Add OMP-style borders, spacing, and keyboard hints to the default approval dialog. Adapt the command preview to fit the choices and bottom border in short terminals.

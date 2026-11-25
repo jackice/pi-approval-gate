@@ -21,6 +21,7 @@ const request: ApprovalRequest = {
 const theme = {
   fg: (_token: string, text: string) => text,
   bold: (text: string) => text,
+  bg: (_token: string, text: string) => text,
 } as unknown as Theme;
 
 const tui = { requestRender: vi.fn(), terminal: { rows: 24, columns: 80 } } as unknown as TUI;
@@ -67,11 +68,11 @@ describe("createNativeApprovalView", () => {
   it("preserves soft-wrap whitespace and visibly encodes command newlines", () => {
     const view = createNativeApprovalView({ ...request, command: "rm  target\nnext" }, tui, theme, 8);
     const lines = view.render(12);
-    const output = lines.map((line) => line.slice(1)).join("").replaceAll(">", "");
+    const output = lines.map((line) => line.slice(2, -2).trimEnd()).join("").replaceAll(">", "");
 
     expect(output).toContain("rm  target\\nnext");
     expect(lines.every((line) => visibleWidth(line) <= 12)).toBe(true);
-    expect(lines.some((line) => line.endsWith(">"))).toBe(true);
+    expect(lines.some((line) => line.slice(2, -2).endsWith(">"))).toBe(true);
   });
 
   it("escapes invisible Unicode code points including supplementary variation selectors", () => {
@@ -97,7 +98,6 @@ describe("createNativeApprovalView", () => {
     const bounds = { row: 0, col: 0, width: 52, height: 1 };
     view.setOverlayHandle({ getBounds: () => bounds } as never);
     const rows = view.render(52);
-    view.handleInput("\x1b[B", keybindings as never);
 
     expect(view.handleInput("\r", keybindings as never)).toBe("deny");
     bounds.height = rows.length;
@@ -105,11 +105,11 @@ describe("createNativeApprovalView", () => {
     expect(view.handleInput("\r", keybindings as never)).toBe("allow_once");
   });
   it("keeps risk and pagination status visible in a narrow approval view", () => {
-    const view = createNativeApprovalView(request, tui, theme, 8);
-    const rows = view.render(10).map((row) => row.trim());
+    const view = createNativeApprovalView(request, tui, theme, 3);
+    const rows = view.render(10).map((row) => row.slice(1, -1).trim());
 
     expect(rows).toContain("Risk: H");
-    expect(rows).toContain("1-7/7");
+    expect(rows).toContain("1-3/7");
   });
 
   it("fits the bottom border and both choices inside a short overlay", () => {
@@ -118,9 +118,9 @@ describe("createNativeApprovalView", () => {
     const rows = view.render(60);
 
     expect(rows).toHaveLength(10);
-    expect(rows.at(-1)).toBe(rows[0]);
-    expect(rows).toContain(" → Deny");
-    expect(rows).toContain("   Allow once");
+    expect(rows.at(-1)).toBe("╰" + "─".repeat(58) + "╯");
+    expect(rows.some((line) => line.startsWith("│ ❯ Allow once"))).toBe(true);
+    expect(rows.some((line) => line.startsWith("│   Deny"))).toBe(true);
   });
 });
 
@@ -158,7 +158,6 @@ describe("createApprovalPrompt", () => {
     if (ui.factory === undefined) throw new Error("factory not registered");
     const component = ui.factory(tui, theme, keybindings, done) as { handleInput(data: string): void };
 
-    component.handleInput("\x1b[A");
     component.handleInput("\r");
     expect(done).not.toHaveBeenCalled();
 
@@ -168,17 +167,33 @@ describe("createApprovalPrompt", () => {
     await expect(prompt.promise).resolves.toBe("allow_once");
   });
 
-  it("uses the native selector with Deny selected by default", async () => {
+  it("uses the native selector with Allow once selected by default", async () => {
     const ui = new FakeUi();
     const prompt = createApprovalPrompt(request, context("tui", ui), { armMs: 0, ui: "native" });
     if (ui.factory === undefined) throw new Error("factory not registered");
     const component = ui.factory(tui, theme, keybindings, ui.resolve!) as { render(width: number): string[]; handleInput(data: string): void };
+    setNativeBounds(ui, 60);
     const rows = component.render(60);
-    expect(rows[0]).toBe("─".repeat(60));
-    expect(rows.at(-1)).toBe(rows[0]);
-    expect(rows).toContain(" Allow tool: bash");
-    expect(rows).toContain(" → Deny");
+    expect(rows[0]).toMatch(/^╭─ ⚠ Dangerous command ─+╮$/);
+    expect(rows.at(-1)).toBe("╰" + "─".repeat(58) + "╯");
+    expect(rows.some((line) => line.startsWith("│ ❯ Allow once"))).toBe(true);
     component.handleInput("\r");
+    await expect(prompt.promise).resolves.toBe("allow_once");
+  });
+
+  it.each(["down and Enter", "Esc"])("denies with %s despite the default selection", async (action) => {
+    const ui = new FakeUi();
+    const prompt = createApprovalPrompt(request, context("tui", ui), { armMs: 0, ui: "native" });
+    const component = ui.factory!(tui, theme, keybindings, ui.resolve!) as { render(width: number): string[]; handleInput(data: string): void };
+    setNativeBounds(ui);
+    component.render(52);
+    if (action === "down and Enter") {
+      component.handleInput("\x1b[B");
+      expect(component.render(52).some((line) => line.startsWith("│ ❯ Deny"))).toBe(true);
+      component.handleInput("\r");
+    } else {
+      component.handleInput("\x1b");
+    }
     await expect(prompt.promise).resolves.toBe("deny");
   });
 
@@ -196,7 +211,6 @@ describe("createApprovalPrompt", () => {
     for (let i = 0; i < 4; i++) component.handleInput("\x1b[6~");
     const page = component.render(52).join("\n");
     expect(page).toContain("\\u{1b}[2Jline three");
-    component.handleInput("\x1b[B");
     component.handleInput("\r");
     expect(done).not.toHaveBeenCalled();
     vi.advanceTimersByTime(500);

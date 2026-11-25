@@ -36,6 +36,7 @@ export function createApprovalPrompt(
       const view = options.ui === "native"
         ? (nativeView = createNativeApprovalView(request, tui, theme, options.maxCommandLines))
         : new ApprovalView(fromPiTheme(theme), {
+            selected: "allow_once",
             request: {
               toolName: request.toolName,
               command: request.command,
@@ -70,7 +71,7 @@ export function createApprovalPrompt(
       blocked: { kind: "permission", message: "bash approval" },
       ...(options.ui === "native" ? {
         overlay: true,
-        overlayOptions: { width: "90%", maxHeight: "90%", margin: 1 },
+        overlayOptions: { width: "100%", maxHeight: "90%", anchor: "bottom-center", margin: { top: 1, bottom: 1 } },
         onHandle: (handle) => nativeView?.setOverlayHandle(handle),
       } : {}),
     },

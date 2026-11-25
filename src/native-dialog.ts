@@ -1,5 +1,5 @@
 import type { ExtensionUIContext, Theme } from "@earendil-works/pi-coding-agent";
-import { Key, SelectList, matchesKey, truncateToWidth, visibleWidth, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
+import { Key, matchesKey, truncateToWidth, visibleWidth, type OverlayHandle, type TUI } from "@earendil-works/pi-tui";
 
 import type { ApprovalRequest, PromptChoice } from "./gate.ts";
 
@@ -13,19 +13,14 @@ export function createNativeApprovalView(
   theme: Theme,
   maxCommandLines: number | undefined,
 ) {
-  const selection = new SelectList([
-    { label: "Deny", value: "deny" },
+  let selected: PromptChoice = "allow_once";
+  const choices = [
     { label: "Allow once", value: "allow_once" },
-  ], 2, {
-    selectedPrefix: (text) => theme.fg("accent", text),
-    selectedText: (text) => theme.fg("accent", text),
-    description: (text) => theme.fg("muted", text),
-    scrollInfo: (text) => theme.fg("muted", text),
-    noMatch: (text) => theme.fg("muted", text),
-  });
+    { label: "Deny", value: "deny" },
+  ] as const;
   const limit = maxCommandLines !== undefined && Number.isFinite(maxCommandLines) && maxCommandLines >= 1
     ? Math.floor(maxCommandLines) : 8;
-  const title = `Allow tool: ${escapeControls(request.toolName)}`;
+  const title = "⚠ Dangerous command";
   const risk = `Risk: ${request.risk.toUpperCase()}`;
   const fields = [
     `Reason: ${escapeControls(request.reason)}`,
@@ -57,12 +52,12 @@ export function createNativeApprovalView(
       overlayHandle = handle;
     },
     render(width: number): readonly string[] {
-      if (width <= 0) {
+      if (width < 3) {
         renderedContextFits = false;
         return [];
       }
-      const inset = width > 2 ? " " : "";
-      const innerWidth = width - 2 * inset.length;
+      const inset = width >= 12 ? " " : "";
+      const innerWidth = width - 2 - 2 * inset.length;
       if (lastWidth !== width) {
         lastWidth = width;
         lines = fields.flatMap((field) => wrapCodeText(field, innerWidth));
@@ -71,8 +66,9 @@ export function createNativeApprovalView(
       // Match the overlay's height cap, including its top and bottom margins.
       const availableRows = Math.min(Math.floor(terminalRows * 0.9), terminalRows - 2);
       const spacer = availableRows >= 15 ? [""] : [];
-      const fixedRows = 8 + 4 * spacer.length;
-      pageRows = Math.max(1, Math.min(limit, availableRows - fixedRows));
+      const previewRows = availableRows - 7 - 4 * spacer.length;
+      const paginated = lines.length > Math.min(limit, previewRows);
+      pageRows = Math.max(1, Math.min(limit, previewRows - Number(paginated)));
       offset = Math.min(offset, Math.max(0, lines.length - pageRows));
       const end = Math.min(lines.length, offset + pageRows);
       const fullPage = `Page ${offset + 1}-${end}/${lines.length}`;
@@ -90,28 +86,40 @@ export function createNativeApprovalView(
         : visibleWidth(`Risk: ${request.risk[0]!.toUpperCase()}`) <= innerWidth
           ? `Risk: ${request.risk[0]!.toUpperCase()}`
           : request.risk[0]!.toUpperCase();
-      const controls = "↑/↓ navigate  Enter select  Esc deny  PgUp/PgDn scroll";
-      const hint = visibleWidth(controls) <= innerWidth ? controls : "↑/↓ Enter Esc PgUp/PgDn";
-      const choices = selection.render(innerWidth);
-      const border = theme.fg("border", "─".repeat(width));
+      const controls = "↑/↓ navigate  ↵ select  Esc cancel";
+      const fullHint = paginated ? controls + "  PgUp/PgDn scroll" : controls;
+      const hint = visibleWidth(fullHint) <= innerWidth ? fullHint : paginated ? "↑/↓ ↵ Esc PgUp/PgDn" : "↑/↓ ↵ Esc";
+      const optionRows = choices.map(({ label, value }) => {
+        const active = value === selected;
+        const row = `${active ? "❯" : " "} ${label}`;
+        if (!active || visibleWidth(row) > innerWidth) return row;
+        return theme.bg("selectedBg", theme.fg("warning", row) + " ".repeat(innerWidth - visibleWidth(row)));
+      });
       const body = [
         ...spacer,
-        theme.fg("accent", title),
         theme.fg("warning", riskLabel),
-        theme.fg("muted", page),
-        ...lines.slice(offset, end),
+        ...(paginated ? [theme.fg("muted", page)] : []),
+        ...lines.slice(offset, end).map((line) => theme.fg("warning", line)),
         ...spacer,
-        ...choices,
+        theme.fg("warning", "Allow?"),
+        ...optionRows,
         ...spacer,
         theme.fg("dim", hint),
         ...spacer,
       ];
-      const output = [border, ...body.map((line) => inset + truncateToWidth(line, innerWidth)), border];
+      const border = (text: string) => theme.fg("accent", text);
+      const heading = truncateToWidth(` ${title} `, width - 3, "");
+      const top = border("╭─") + theme.fg("warning", theme.bold(heading))
+        + border("─".repeat(width - 3 - visibleWidth(heading)) + "╮");
+      const side = border("│");
+      const output = [top, ...body.map((line) => {
+        const content = truncateToWidth(line, innerWidth);
+        return side + inset + content + " ".repeat(innerWidth - visibleWidth(content)) + inset + side;
+      }), border("╰" + "─".repeat(width - 2) + "╯")];
       renderedWidth = width;
       renderedRows = output.length;
       renderedContextFits = body.every((line) => visibleWidth(line) <= innerWidth)
-        && choices[0]?.includes("Deny") === true
-        && choices[1]?.includes("Allow once") === true;
+        && visibleWidth(title) <= width - 3;
       return output;
     },
     invalidate(): void {
@@ -121,10 +129,10 @@ export function createNativeApprovalView(
     handleInput(data: string, keys: ApprovalKeys): PromptChoice | undefined {
       if (keys.matches(data, "tui.select.cancel")) return "deny";
       if (keys.matches(data, "tui.select.confirm")) {
-        return canAllow() && selection.getSelectedItem()?.value === "allow_once" ? "allow_once" : "deny";
+        return canAllow() && selected === "allow_once" ? "allow_once" : "deny";
       }
-      if (keys.matches(data, "tui.select.up")) selection.setSelectedIndex(0);
-      else if (keys.matches(data, "tui.select.down")) selection.setSelectedIndex(1);
+      if (keys.matches(data, "tui.select.up")) selected = "allow_once";
+      else if (keys.matches(data, "tui.select.down")) selected = "deny";
       else if (matchesKey(data, Key.pageUp) || keys.matches(data, "tui.select.pageUp")) offset = Math.max(0, offset - pageRows);
       else if (matchesKey(data, Key.pageDown) || keys.matches(data, "tui.select.pageDown")) offset = Math.min(Math.max(0, lines.length - pageRows), offset + pageRows);
       return undefined;

@@ -32,7 +32,7 @@ PI_APPROVAL_ARM_MS
 
 Pi parses extension flags after loading the extension. Settings are read when each request is created.
 
-The native-list view is the default. It starts on **Deny** and supports Page Up and Page Down for long commands. It uses the same approval gate, confirmation delay, and cancellation rules as the styled panel.
+The native-list view is the default. Both views start on **Allow once** and require Enter after the confirmation delay. Press Down to select **Deny**, or Esc to deny immediately. Use Page Up and Page Down to inspect long commands.
 
 ### Optional uv guard
 
