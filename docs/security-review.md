@@ -33,11 +33,14 @@
 | — | — | 可信 RPC 审批通道未接入，RPC 危险命令默认拒绝 |
 | — | — | `pi.exec`、其他工具面（write/edit/MCP/powershell）不在 bash Gate 范围 |
 | — | — | 已发起独立复审，未产出结论；G4 不视为通过 |
+| — | 发布阻断 | Pi 1.6.0 `ctx.ui.confirm()` 默认选中 `Yes`，首次 Enter 即可批准，不满足默认拒绝和防误触约束；不能直接作为回滚界面。 |
 
 ## 回归
 
 - `pi-approval-gate`：66 个测试（新增两项注册来源检查）。
 - 候选 tarball 在 Pi 1.6.0 隔离共装验证：加载路径和工具来源路径指向同一文件时允许使用；缺失或不同来源仍阻断。启动探针没有执行审批，不能替代最终绑定与取消验证。
+- 新候选按 `npm install --omit=peer` 隔离安装并在 Pi 1.6.0 启动，`pi-ui@0.4.2` 从运行时依赖解析，Pi TUI 由宿主提供。未执行 Bash 命令。
+- 原生 `confirm()` 的无副作用 PTY 探针：默认选中 `Yes`，立即按 Enter 返回批准；`AbortSignal` 会关闭对话框并返回拒绝。取消能力不能替代默认拒绝与防误触。
 - 真机：
   - 危险命令 deny / allow / timeout
   - fullscreen 20 行命令 PgDn 后可见 `rm -rf target`

@@ -2,6 +2,7 @@
 
 ## 0.1.1
 
+- 将 `@jackice/pi-ui` 固定为运行时依赖；Pi 省略 peer 安装时仍能加载候选扩展。
 - 按真实文件路径验证 `bash` 注册来源，避免符号链接安装误阻断自身工具；无法确认来源时仍拒绝。
 - 安全评审 C1/H1/H2/H3 修复：线性 quote-aware 策略、包装命令递归、fail-closed、git/gh 全局选项、fullscreen 分页
 - M1/M2/M3/M4/M5 修复：移除超线性正则、继承 shell 前缀、拦截 user_bash、bidi 清洗、影子注册自检

@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@jackice/pi-ui':
+        specifier: 0.4.2
+        version: 0.4.2(@earendil-works/pi-tui@1.6.0)
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 1.6.0
@@ -14,9 +18,6 @@ importers:
       '@earendil-works/pi-tui':
         specifier: 1.6.0
         version: 1.6.0
-      '@jackice/pi-ui':
-        specifier: file:../pi-ui
-        version: file:../pi-ui(@earendil-works/pi-tui@1.6.0)
       '@types/node':
         specifier: ^24.0.0
         version: 24.19.2
@@ -324,8 +325,8 @@ packages:
   '@isaacs/nonrecursive-glob-match@1.1.0':
     resolution: {integrity: sha512-GPm/Dbvk5RLmhRnxXIa7nTpK0xtl4E0wj0MslsuNiJ1FIROU+2+9lgUC/dgF7Ey4QCWhfEsgxilMRMCdHPfDfw==}
 
-  '@jackice/pi-ui@file:../pi-ui':
-    resolution: {directory: ../pi-ui, type: directory}
+  '@jackice/pi-ui@0.4.2':
+    resolution: {integrity: sha512-EUY+KyeG+BcOMY5pFJQnD+JXFuxu3gDz/wZSo1uwyJmXU3EWWERrClV05AklBV0Zvx8nv1MUwWmRNfMOCzJxcg==}
     peerDependencies:
       '@earendil-works/pi-tui': ^1.6.0
 
@@ -1471,7 +1472,7 @@ snapshots:
 
   '@isaacs/nonrecursive-glob-match@1.1.0': {}
 
-  '@jackice/pi-ui@file:../pi-ui(@earendil-works/pi-tui@1.6.0)':
+  '@jackice/pi-ui@0.4.2(@earendil-works/pi-tui@1.6.0)':
     dependencies:
       '@earendil-works/pi-tui': 1.6.0
 
