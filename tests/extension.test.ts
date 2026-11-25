@@ -46,3 +46,89 @@ it("blocks bash with a different or missing source file", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it("accepts the host extension path that actually registered bash", () => {
+  const handlers = new Map<string, Handler>();
+  const hostPath = fileURLToPath(import.meta.url);
+  const api = {
+    on(event: string, handler: Handler) { handlers.set(event, handler); },
+    registerFlag: vi.fn(),
+    registerTool: vi.fn(),
+    getFlag: () => undefined,
+    getSettings: () => ({}),
+    getAllTools: () => [{ name: "bash", sourceInfo: { path: hostPath } }],
+  } as unknown as ExtensionAPI;
+  const ctx = { hasUI: false } as ExtensionContext;
+
+  approvalGateExtension(api, { sourcePath: hostPath });
+  handlers.get("session_start")?.({}, ctx);
+
+  expect(handlers.get("tool_call")?.({ toolName: "bash" }, ctx)).toBeUndefined();
+});
+
+it("blocks guarded python tooling before opening the approval UI", async () => {
+  const handlers = new Map<string, Handler>();
+  const custom = vi.fn(() => new Promise<never>(() => {}));
+  const api = {
+    on(event: string, handler: Handler) { handlers.set(event, handler); },
+    registerFlag: vi.fn(),
+    registerTool: vi.fn(),
+    getFlag: () => undefined,
+    getSettings: () => ({}),
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    mode: "tui",
+    hasUI: true,
+    cwd: "/tmp",
+    sessionManager: { getSessionId: () => "session" },
+    ui: { custom },
+  } as unknown as ExtensionContext;
+
+  approvalGateExtension(api, {
+    guard: (command) => (command.includes("pip") ? "pip is disabled" : undefined),
+  });
+  const result = await handlers.get("user_bash")?.({ command: "pip install x", cwd: "/tmp" }, ctx);
+
+  expect(custom).not.toHaveBeenCalled();
+  expect(result).toMatchObject({
+    result: { output: "pip is disabled", exitCode: 1, cancelled: true },
+  });
+});
+
+it("uses the native approval view by default", async () => {
+  const handlers = new Map<string, Handler>();
+  let customOptions: unknown;
+  let settlePrompt: ((choice: "deny" | "allow_once") => void) | undefined;
+  const api = {
+    on(event: string, handler: Handler) { handlers.set(event, handler); },
+    registerFlag: vi.fn(),
+    registerTool: vi.fn(),
+    getFlag: () => undefined,
+    getSettings: () => ({}),
+  } as unknown as ExtensionAPI;
+  const ui = {
+    custom: (_factory: unknown, options: unknown) => {
+      customOptions = options;
+      return new Promise<"deny" | "allow_once">((resolve) => { settlePrompt = resolve; });
+    },
+  };
+  const ctx = {
+    mode: "tui",
+    hasUI: true,
+    cwd: "/tmp",
+    sessionManager: { getSessionId: () => "session" },
+    ui,
+  } as unknown as ExtensionContext;
+
+  approvalGateExtension(api);
+  const result = handlers.get("user_bash")?.(
+    { command: "rm -rf /tmp/fixture", cwd: "/tmp" },
+    ctx,
+  );
+
+  expect(customOptions).toMatchObject({ overlay: true });
+  settlePrompt?.("deny");
+  await expect(result).resolves.toMatchObject({
+    result: { exitCode: 1, cancelled: true },
+  });
+});

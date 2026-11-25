@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { createApprovalPrompt } from "./src/dialog.ts";
+import { createBashSpawnHook } from "./src/bash-hook.ts";
 import { verifyFinalBinding } from "./src/binding.ts";
 import { ApprovalGate, type ApprovalAuthorization, type ApprovalRequest } from "./src/gate.ts";
 import { dangerReason } from "./src/policy.ts";
@@ -21,7 +22,14 @@ const DEFAULT_ARM_MS = 500;
 const MAX_PENDING = 16;
 const MAX_COMMAND_LINES = 8;
 
-export default function approvalGateExtension(pi: ExtensionAPI): void {
+export interface ApprovalGateOptions {
+  /** 返回拦截说明时阻止执行；先于审批对话框。 */
+  guard?: ((command: string) => string | undefined) | undefined;
+  /** 实际注册 bash 的扩展文件路径；由其他扩展复用时必须传入。 */
+  sourcePath?: string | undefined;
+}
+
+export default function approvalGateExtension(pi: ExtensionAPI, config: ApprovalGateOptions = {}): void {
   pi.registerFlag("approval-timeout-ms", {
     description: "Pending bash approval timeout in milliseconds",
     type: "string",
@@ -31,20 +39,20 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
     type: "string",
   });
   pi.registerFlag("approval-ui", {
-    description: "Approval dialog style (panel or native)",
+    description: "Approval dialog style (native by default; panel optional)",
     type: "string",
   });
 
   const promptOptions = () => ({
     armMs: numberFlag(pi, "approval-arm-ms", "PI_APPROVAL_ARM_MS", DEFAULT_ARM_MS),
     maxCommandLines: MAX_COMMAND_LINES,
-    ...(pi.getFlag("approval-ui") === "native" ? { ui: "native" as const } : {}),
+    ...(pi.getFlag("approval-ui") === "panel" ? {} : { ui: "native" as const }),
   });
 
   const timeoutMs = () =>
     numberFlag(pi, "approval-timeout-ms", "PI_APPROVAL_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
   const gate = new ApprovalGate({ timeoutMs, maxPending: MAX_PENDING });
-  const selfPath = fileURLToPath(import.meta.url);
+  const selfPath = config.sourcePath ?? fileURLToPath(import.meta.url);
   let shadowed = false;
 
   const template = createBashToolDefinition(process.cwd(), {
@@ -58,6 +66,14 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
       const cwd = ctx.cwd;
       const shell = shellSettings(pi);
       const finalCommand = shell.commandPrefix ? `${shell.commandPrefix}\n${command}` : command;
+      const blocked = config.guard?.(finalCommand);
+      if (blocked !== undefined) {
+        return {
+          content: [{ type: "text", text: blocked }],
+          isError: true,
+          details: undefined,
+        };
+      }
       const reason = dangerReason(finalCommand);
       let authorization: ApprovalAuthorization | undefined;
       let approvalRequest: ApprovalRequest | undefined;
@@ -96,8 +112,12 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
         }
       }
 
-      const options = bashOptions(shell, (context) =>
-        verifyFinalBinding(authorization, approvalRequest, context, signal));
+      const options = bashOptions(shell, createBashSpawnHook({
+        guard: config.guard,
+        authorization,
+        request: approvalRequest,
+        signal,
+      }));
       try {
         return await createBashToolDefinition(cwd, options).execute(
           toolCallId,
@@ -133,44 +153,61 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
   pi.on("user_bash", async (event, ctx) => {
     const shell = shellSettings(pi);
     const command = shell.commandPrefix ? `${shell.commandPrefix}\n${event.command}` : event.command;
-    const reason = dangerReason(command);
-    if (reason === undefined) return undefined;
-    const approved = await gate.request(
-      {
-        sessionId: ctx.sessionManager.getSessionId(),
-        toolCallId: randomUUID(),
-        toolName: "user_bash",
-        command,
-        cwd: event.cwd,
-        reason,
-        risk: "high",
-      },
-      {
-        prompt: (request) => createApprovalPrompt(request, ctx, promptOptions()),
-      },
-    );
-    if (approved.decision !== "allow_once" || approved.authorization === undefined) {
+    const blocked = config.guard?.(command);
+    if (blocked !== undefined) {
       return {
-        result: {
-          output: `Blocked by approval gate (${approved.decision}); command was not executed.`,
-          exitCode: 1,
-          cancelled: true,
-          truncated: false,
-        },
+        result: { output: blocked, exitCode: 1, cancelled: true, truncated: false },
       };
     }
+    const reason = dangerReason(command);
+    let authorization: ApprovalAuthorization | undefined;
+    let request: ApprovalRequest | undefined;
+    if (reason !== undefined) {
+      const approved = await gate.request(
+        {
+          sessionId: ctx.sessionManager.getSessionId(),
+          toolCallId: randomUUID(),
+          toolName: "user_bash",
+          command,
+          cwd: event.cwd,
+          reason,
+          risk: "high",
+        },
+        {
+          prompt: (promptRequest) => createApprovalPrompt(promptRequest, ctx, promptOptions()),
+        },
+      );
+      if (approved.decision !== "allow_once" || approved.authorization === undefined) {
+        return {
+          result: {
+            output: `Blocked by approval gate (${approved.decision}); command was not executed.`,
+            exitCode: 1,
+            cancelled: true,
+            truncated: false,
+          },
+        };
+      }
+      authorization = approved.authorization;
+      request = approved.request;
+    } else if (config.guard === undefined) {
+      return undefined;
+    }
 
-    const authorization = approved.authorization;
-    const request = approved.request;
     const local = createLocalBashOperations(shell.shellPath === undefined ? undefined : { shellPath: shell.shellPath });
     return {
       operations: {
         async exec(command: string, cwd: string, options: Parameters<typeof local.exec>[2]) {
+          const spawnHook = createBashSpawnHook({
+            guard: config.guard,
+            authorization,
+            request,
+            signal: options.signal,
+          });
           try {
-            verifyFinalBinding(authorization, request, { command, cwd, env: options.env ?? process.env }, options.signal);
-            return await local.exec(command, cwd, options);
+            const context = spawnHook({ command, cwd, env: options.env ?? process.env });
+            return await local.exec(context.command, context.cwd, options);
           } finally {
-            authorization.revoke();
+            authorization?.revoke();
           }
         },
       },

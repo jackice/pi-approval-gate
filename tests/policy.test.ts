@@ -36,6 +36,8 @@ const dangerous = [
   "docker rm -f app",
   "mv /tmp/x /dev/null",
   "gh -R owner/repo pr merge 1",
+  "glab mr merge 12",
+  "glab mr close 12",
   "xargs -I{} rm -rf",
   "source evil.sh",
   "nice rm -rf ~/x",

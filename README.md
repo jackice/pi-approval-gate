@@ -2,7 +2,7 @@
 
 An approval extension for Pi's supported Bash execution paths. It binds user approval to the final command and working directory, after `tool_call` handlers have run.
 
-- Verified with Pi `1.6.0` and `@jackice/pi-ui` `0.4.2`.
+- Verified with Pi `1.6.0` and `@jackice/pi-ui` `0.4.2`. The native selection list is the default approval UI.
 - Commands that require approval are denied when no supported interactive UI is available, in subagents, or on timeout, abort, reload, or shutdown.
 - Registers a replacement `bash` tool through Pi's extension API. No Pi source changes are required.
 - Commands the policy cannot parse require approval.
@@ -24,14 +24,32 @@ An approval extension for Pi's supported Bash execution paths. It binds user app
 ```text
 --approval-timeout-ms <ms>   # Default: 120000; includes time spent in the queue.
 --approval-arm-ms <ms>       # Default: 500; minimum delay before allowing.
---approval-ui native        # Use Pi's native selection list instead of the styled panel.
+--approval-ui panel         # Use the styled panel instead of the native selection list.
 PI_APPROVAL_TIMEOUT_MS
 PI_APPROVAL_ARM_MS
 ```
 
 Pi parses extension flags after loading the extension. Settings are read when each request is created.
 
-The native-list view starts on **Deny** and supports Page Up and Page Down for long commands. It uses the same approval gate, confirmation delay, and cancellation rules as the default panel.
+The native-list view is the default. It starts on **Deny** and supports Page Up and Page Down for long commands. It uses the same approval gate, confirmation delay, and cancellation rules as the styled panel.
+
+## Reuse from another extension
+
+Pi `1.6.0` allows only one `bash` registration per session. When another extension must own that registration (for example a host that already wraps `bash`), pass its options instead of loading this extension twice:
+
+```ts
+import approvalGateExtension from "./pi-approval-gate/index.ts";
+
+export default function (pi) {
+  approvalGateExtension(pi, {
+    guard: (command) => (command.startsWith("pip ") ? "use uv instead" : undefined),
+    sourcePath: fileURLToPath(import.meta.url),
+  });
+}
+```
+
+- `guard` runs before the approval dialog for both the tool and `user_bash`; a returned message blocks the command.
+- `sourcePath` must be the file that registers the tool, otherwise the source check blocks `bash`.
 
 ## Verification
 

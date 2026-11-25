@@ -252,7 +252,9 @@ function analyzeGh(args: string[]): string | undefined {
   if (scope === "repo" && ["create", "delete", "rename", "archive", "unarchive", "edit", "set-default", "deploy-key"].includes(action)) {
     return "remote repository write";
   }
-  if (scope === "pr" && ["merge", "close"].includes(action)) return "remote pull request write";
+  if ((scope === "pr" || scope === "mr") && ["merge", "close"].includes(action)) {
+    return "remote pull request write";
+  }
   if (scope === "issue" && ["close", "delete"].includes(action)) return "remote issue write";
   if (scope === "secret" && ["set", "delete", "remove"].includes(action)) return "remote secret write";
   if (scope === "variable" && ["set", "delete", "remove"].includes(action)) return "remote variable write";
