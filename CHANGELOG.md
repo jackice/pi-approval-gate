@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.5
+
+- Add OMP-style borders, spacing, and keyboard hints to the default approval dialog. Adapt the command preview to fit the choices and bottom border in short terminals.
+
 ## 0.1.4
 
 - English code comments, changelog, and review notes. No behavior change.

@@ -67,7 +67,7 @@ describe("createNativeApprovalView", () => {
   it("preserves soft-wrap whitespace and visibly encodes command newlines", () => {
     const view = createNativeApprovalView({ ...request, command: "rm  target\nnext" }, tui, theme, 8);
     const lines = view.render(12);
-    const output = lines.join("").replaceAll(">", "");
+    const output = lines.map((line) => line.slice(1)).join("").replaceAll(">", "");
 
     expect(output).toContain("rm  target\\nnext");
     expect(lines.every((line) => visibleWidth(line) <= 12)).toBe(true);
@@ -106,12 +106,22 @@ describe("createNativeApprovalView", () => {
   });
   it("keeps risk and pagination status visible in a narrow approval view", () => {
     const view = createNativeApprovalView(request, tui, theme, 8);
-    const rows = view.render(8);
+    const rows = view.render(10).map((row) => row.trim());
 
-    expect(rows[1]).toBe("Risk: H");
-    expect(rows[2]).toBe("1-7/7");
+    expect(rows).toContain("Risk: H");
+    expect(rows).toContain("1-7/7");
   });
 
+  it("fits the bottom border and both choices inside a short overlay", () => {
+    const shortTui = { terminal: { rows: 12, columns: 80 } } as unknown as TUI;
+    const view = createNativeApprovalView({ ...request, command: "long ".repeat(100) }, shortTui, theme, 8);
+    const rows = view.render(60);
+
+    expect(rows).toHaveLength(10);
+    expect(rows.at(-1)).toBe(rows[0]);
+    expect(rows).toContain(" → Deny");
+    expect(rows).toContain("   Allow once");
+  });
 });
 
 afterEach(() => {
@@ -163,7 +173,11 @@ describe("createApprovalPrompt", () => {
     const prompt = createApprovalPrompt(request, context("tui", ui), { armMs: 0, ui: "native" });
     if (ui.factory === undefined) throw new Error("factory not registered");
     const component = ui.factory(tui, theme, keybindings, ui.resolve!) as { render(width: number): string[]; handleInput(data: string): void };
-    expect(component.render(60).join("\n")).toContain("Bash approval");
+    const rows = component.render(60);
+    expect(rows[0]).toBe("─".repeat(60));
+    expect(rows.at(-1)).toBe(rows[0]);
+    expect(rows).toContain(" Allow tool: bash");
+    expect(rows).toContain(" → Deny");
     component.handleInput("\r");
     await expect(prompt.promise).resolves.toBe("deny");
   });

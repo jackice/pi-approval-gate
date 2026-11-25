@@ -25,12 +25,12 @@ export function createNativeApprovalView(
   });
   const limit = maxCommandLines !== undefined && Number.isFinite(maxCommandLines) && maxCommandLines >= 1
     ? Math.floor(maxCommandLines) : 8;
-  const title = `Bash approval · ${escapeControls(request.toolName)}`;
+  const title = `Allow tool: ${escapeControls(request.toolName)}`;
   const risk = `Risk: ${request.risk.toUpperCase()}`;
   const fields = [
-    `cwd: ${escapeControls(request.cwd)}`,
-    `reason: ${escapeControls(request.reason)}`,
-    `command: ${escapeControls(request.command)}`,
+    `Reason: ${escapeControls(request.reason)}`,
+    `Cwd: ${escapeControls(request.cwd)}`,
+    `Command: ${escapeControls(request.command)}`,
   ];
   let overlayHandle: OverlayHandle | undefined;
   let lines: string[] = [];
@@ -61,44 +61,57 @@ export function createNativeApprovalView(
         renderedContextFits = false;
         return [];
       }
+      const inset = width > 2 ? " " : "";
+      const innerWidth = width - 2 * inset.length;
       if (lastWidth !== width) {
         lastWidth = width;
-        lines = fields.flatMap((field) => wrapCodeText(field, width));
+        lines = fields.flatMap((field) => wrapCodeText(field, innerWidth));
       }
-      pageRows = Math.max(1, Math.min(limit, Math.floor(tui.terminal.rows * 0.75) - 6));
+      const terminalRows = tui.terminal.rows;
+      // Match the overlay's height cap, including its top and bottom margins.
+      const availableRows = Math.min(Math.floor(terminalRows * 0.9), terminalRows - 2);
+      const spacer = availableRows >= 15 ? [""] : [];
+      const fixedRows = 8 + 4 * spacer.length;
+      pageRows = Math.max(1, Math.min(limit, availableRows - fixedRows));
       offset = Math.min(offset, Math.max(0, lines.length - pageRows));
       const end = Math.min(lines.length, offset + pageRows);
       const fullPage = `Page ${offset + 1}-${end}/${lines.length}`;
       const compactRange = `${offset + 1}-${end}/${lines.length}`;
       const currentPage = `${offset + 1}/${lines.length}`;
-      const page = visibleWidth(fullPage) <= width
+      const page = visibleWidth(fullPage) <= innerWidth
         ? fullPage
-        : visibleWidth(compactRange) <= width
+        : visibleWidth(compactRange) <= innerWidth
           ? compactRange
-          : visibleWidth(currentPage) <= width
+          : visibleWidth(currentPage) <= innerWidth
             ? currentPage
             : String(offset + 1);
-      const riskLabel = visibleWidth(risk) <= width
+      const riskLabel = visibleWidth(risk) <= innerWidth
         ? risk
-        : visibleWidth(`Risk: ${request.risk[0]!.toUpperCase()}`) <= width
+        : visibleWidth(`Risk: ${request.risk[0]!.toUpperCase()}`) <= innerWidth
           ? `Risk: ${request.risk[0]!.toUpperCase()}`
           : request.risk[0]!.toUpperCase();
-      const hint = "PgUp/PgDn: scroll · Esc: deny";
-      const choices = selection.render(width);
-      const output = [
-        truncateToWidth(theme.fg("warning", title), width),
-        truncateToWidth(theme.fg("warning", riskLabel), width),
-        truncateToWidth(theme.fg("muted", page), width),
+      const controls = "↑/↓ navigate  Enter select  Esc deny  PgUp/PgDn scroll";
+      const hint = visibleWidth(controls) <= innerWidth ? controls : "↑/↓ Enter Esc PgUp/PgDn";
+      const choices = selection.render(innerWidth);
+      const border = theme.fg("border", "─".repeat(width));
+      const body = [
+        ...spacer,
+        theme.fg("accent", title),
+        theme.fg("warning", riskLabel),
+        theme.fg("muted", page),
         ...lines.slice(offset, end),
-        truncateToWidth(theme.fg("muted", hint), width),
+        ...spacer,
         ...choices,
+        ...spacer,
+        theme.fg("dim", hint),
+        ...spacer,
       ];
+      const output = [border, ...body.map((line) => inset + truncateToWidth(line, innerWidth)), border];
       renderedWidth = width;
       renderedRows = output.length;
-      renderedContextFits = [title, riskLabel, page, hint].every((line) => visibleWidth(line) <= width)
-        && choices.length > 0
-        && choices.every((line) => visibleWidth(line) <= width)
-        && choices.some((line) => line.includes("Allow once"));
+      renderedContextFits = body.every((line) => visibleWidth(line) <= innerWidth)
+        && choices[0]?.includes("Deny") === true
+        && choices[1]?.includes("Allow once") === true;
       return output;
     },
     invalidate(): void {
