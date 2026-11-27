@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0
+
+- Configurable policy in `settings.json` under `approvalGate`: `mode`, `patterns` (ordered `match`/`approval` glob rules), `extraDangerous`, and `redirects`. Read on every command, so edits apply without a restart or a new release.
+- **Default behavior change:** `mode` defaults to `yolo`, which follows OMP's `bash.patterns` semantics — only the critical patterns and your own `prompt`/`deny` rules prompt. The previous full analysis (`rm -rf <dir>`, `git push`, `gh pr merge`, `npm publish`, interpreters, unparseable commands) moved to `mode: "strict"`. Critical patterns also prompt in `yolo` (OMP's `resolveApproval` auto-approves them there).
+- Adds OMP's `CRITICAL_BASH_PATTERNS` (20 patterns) as the critical set; it matches the raw command line and does not depend on the tokenizer.
+- `patterns` follow OMP's `bash.patterns`: the first matching rule wins, `allow` only vouches for a single simple command, and `deny`/`prompt` also match every shell segment, including segments built from expansions (`cd /tmp && rm -rf "$dir"`). Put narrow `deny` rules before broader `allow` rules.
+- The spawn-time binding check now uses the same policy as the approval decision; previously a permitted command could fail with `approval binding mismatch`.
+- Writes to `/dev/null` (`>/dev/null`, `2>/dev/null`, `&>/dev/null`, `>>/dev/null`) no longer force approval in `strict` mode. `yolo` does not tokenize, so redirection alone never prompts there.
+
 ## 0.1.6
 
 - Use a full-width rounded approval dialog with a warning heading and a highlighted selection.
