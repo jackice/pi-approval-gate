@@ -5,7 +5,7 @@ An approval extension for Pi's supported Bash execution paths. It binds user app
 - Verified with Pi `1.6.0` and `@jackice/pi-ui` `0.4.2`. The native selection list is the default approval UI.
 - Commands that require approval are denied when no supported interactive UI is available, in subagents, or on timeout, abort, reload, or shutdown.
 - Registers a replacement `bash` tool through Pi's extension API. No Pi source changes are required.
-- Commands the policy cannot parse require approval.
+- Only critical patterns prompt by default (`approvalGate.mode: "yolo"`, matching OMP). Unparseable commands no longer require approval; set `mode: "strict"` to restore the old full-analysis behavior.
 - Honors `shellCommandPrefix` and `shellPath` settings and shows the final command before execution.
 - Known limit: Pi `1.6.0` has no synchronous pre-spawn hook, so a cancellation in the gap between authorization and `spawn()` can still start the command. See the [review notes](docs/security-review.md). This is not a sandbox.
 
@@ -43,6 +43,50 @@ The native-list view is the default. Both views start on **Allow once** and requ
 ```
 
 It is off by default. The guard is separate from approval: it runs first for both the tool and `user_bash`, and a returned message stops the command.
+
+### Configurable policy
+
+`approvalGate` sets the default posture and extends the built-in policy without a new release. It is read on every command, so edits apply to the next command with no restart. Unreadable entries are ignored and reported once at session start.
+
+```json
+{
+  "approvalGate": {
+    "mode": "yolo",
+    "redirects": ["/dev/null"],
+    "extraDangerous": ["kubectl", "terraform"],
+    "patterns": [
+      { "match": "git *", "approval": "allow" },
+      { "match": "curl *", "approval": "prompt" },
+      { "match": "deploy *", "approval": "deny" }
+    ]
+  }
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `mode` | `"yolo"` | Default posture. See the table below. |
+| `redirects` | `["/dev/null"]` | Redirection targets dropped before tokenizing. |
+| `extraDangerous` | `[]` | Command names that always prompt; matched at command position, including through wrappers and `sh -c`. |
+| `patterns` | `[]` | Ordered glob rules (`*` only); the first matching rule wins. |
+
+Modes:
+
+| Mode | Prompts for | Notes |
+| --- | --- | --- |
+| `yolo` (default) | Critical patterns only | OMP's `yolo` also auto-approves critical commands (its bare critical override is ignored outside non-yolo modes). This extension deliberately keeps the critical floor, so `rm -rf /` still prompts. Full-analysis checks such as `rm -rf build`, `git push`, `gh pr merge`, `npm publish`, and unparseable commands (loops, `"$var"`) do not prompt. |
+| `strict` | The full built-in analysis plus critical patterns | Dangerous commands, remote writes, interpreters, `rm`/`sudo`, unparseable commands. This was the pre-0.1.7 behavior. |
+| `always-ask` | Every command | Only `deny` and `allow` rules can change the outcome. |
+
+`yolo` relies on the same critical set as OMP's `CRITICAL_BASH_PATTERNS`, matched against the raw command line: recursive `rm` on `/`, `sudo rm`, `chmod`/`chown -R` on `/`, fork bombs, writes to `/dev/sd*`, `mkfs`, `dd`/`shred` on devices, `cryptsetup`, writes to `/etc/passwd|shadow|sudoers`, `curl|sh`, process substitution from `curl`, `eval "$(curl ...)"`, `kill -9 1`, `shutdown`/`reboot`/`init 0`, and `nc -e`.
+
+`approval` values (all modes):
+
+- `deny` rejects the command without a dialog; the model sees `Blocked by bash pattern: <match>`.
+- `prompt` shows the approval dialog.
+- `allow` skips the dialog, but only for a command the tokenizer can read as a single simple command. Any `;`, `&&`, `||`, `|`, `&`, `<`, `>`, `$(`, backtick, or `-c`/`--eval` option disables the rule, so `match: "git *"` never approves `git status && rm -rf build`.
+
+Rule evaluation follows OMP's `bash.patterns`: the first matching rule wins, so put a narrow `deny` before a broader `allow` (`git push *` deny must precede `git *` allow). Order of checks: the matched rule's `deny`, then the mode's checks (critical patterns run first), then its `allow`, then its `prompt`, then the mode default. `deny` and `prompt` match the whole command and every shell segment, including segments built from expansions (`cd /tmp && rm -rf "$dir"`). A configured `allow` cannot approve `rm -rf /` in any mode.
 
 ## Verification
 

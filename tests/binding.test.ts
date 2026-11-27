@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { verifyFinalBinding } from "../src/binding.ts";
 import { ApprovalGate, type ApprovalRequest } from "../src/gate.ts";
+import { parsePolicyConfig } from "../src/policy-config.ts";
 
 const env = {};
 const request: Omit<ApprovalRequest, "id" | "fingerprint"> = {
@@ -84,5 +85,60 @@ describe("verifyFinalBinding", () => {
       { command: request.command, cwd: request.cwd, env },
       controller.signal,
     )).toThrow("aborted");
+  });
+});
+
+describe("verifyFinalBinding with a policy config", () => {
+  const yolo = parsePolicyConfig(undefined).config;
+
+  it("spawns commands the active policy permits without an authorization", () => {
+    for (const command of ["git push origin main", "rm -rf build", "gh pr merge 1", "echo hi"]) {
+      expect(() => verifyFinalBinding(
+        undefined,
+        undefined,
+        { command, cwd: "/tmp/work", env },
+        undefined,
+        yolo,
+      )).not.toThrow();
+    }
+  });
+
+  it("still requires an authorization for critical commands", () => {
+    expect(() => verifyFinalBinding(
+      undefined,
+      undefined,
+      { command: "rm -rf /", cwd: "/tmp/work", env },
+      undefined,
+      yolo,
+    )).toThrow("approval binding mismatch");
+  });
+
+  it("uses the configured redirect targets instead of the /dev/null default", () => {
+    const config = parsePolicyConfig({ mode: "strict", redirects: ["/tmp/gate.log"] }).config;
+    expect(() => verifyFinalBinding(
+      undefined,
+      undefined,
+      { command: "rg -l x . > /tmp/gate.log", cwd: "/tmp/work", env },
+      undefined,
+      config,
+    )).not.toThrow();
+    expect(() => verifyFinalBinding(
+      undefined,
+      undefined,
+      { command: "rg -l x . > /dev/null", cwd: "/tmp/work", env },
+      undefined,
+      config,
+    )).toThrow("approval binding mismatch");
+  });
+
+  it("requires an authorization in strict mode for a command yolo allows", () => {
+    const strict = parsePolicyConfig({ mode: "strict" }).config;
+    expect(() => verifyFinalBinding(
+      undefined,
+      undefined,
+      { command: "git push origin main", cwd: "/tmp/work", env },
+      undefined,
+      strict,
+    )).toThrow("approval binding mismatch");
   });
 });

@@ -1,4 +1,58 @@
+import { DEFAULT_REDIRECT_TARGETS, type PolicyConfig } from "./policy-config.ts";
+
 const MAX_COMMAND_LENGTH = 8192;
+
+export type AnalysisOptions = Pick<Partial<PolicyConfig>, "redirects" | "extraDangerous">;
+
+/**
+ * Critical patterns identical to OMP's `CRITICAL_BASH_PATTERNS`.
+ * `yolo` relies on these alone, matched against the raw command line, so no tokenizer runs.
+ * The list stays narrow: a miss costs data or the host, while a false positive can be undone
+ * with a `patterns` rule.
+ */
+export const CRITICAL_COMMAND_PATTERNS: readonly RegExp[] = [
+  // Recursive destruction.
+  /\brm\s+-[a-z]*[rRfF][a-z]*\s+\//i,
+  /\bsudo\s+rm\b/i,
+  /\bchmod\s+-R\s+[0-7]+\s+\//i,
+  /\bchmod\s+-R\s+[ugoa+\-=rwxXst,]+\s+\//,
+  /\bchown\s+-R\s+\S+\s+\//i,
+
+  // fork bomb。
+  /:\(\)\s*\{\s*:\s*\|\s*:/i,
+
+  // Disk and filesystem destruction.
+  />\s*\/dev\/sd[a-z]/i,
+  /\bmkfs(\.|\b)/i,
+  /\bdd\s+if=.+of=\/dev\//i,
+  /\bshred\s+\/dev\//i,
+  /\bcryptsetup\b/i,
+
+  // System configuration destruction.
+  />\s*\/etc\/(?:passwd|shadow|sudoers)\b/i,
+  /\btee\s+(?:-a\s+)?\/etc\/(?:passwd|shadow|sudoers)\b/i,
+
+  // Remote fetch and execute.
+  /\b(?:curl|wget|fetch)\b[^|]*\|\s*(?:bash|sh|zsh|fish)\b/i,
+  /(?:^|[\s;&|(])(?:bash|sh|zsh|source|\.)\s+<\(\s*(?:curl|wget|fetch)\b/i,
+  /\beval\s+["'`]?\$\(\s*(?:curl|wget|fetch)\b|\beval\s+`\s*(?:curl|wget|fetch)\b/i,
+
+  // Process and host control.
+  /\bkill\s+-9\s+1\b/,
+  /(?:^|[\s;&|(])(?:shutdown|poweroff|reboot|halt)(?:\s|$|[;|&])/i,
+  /(?:^|[\s;&|(])init\s+0\b/i,
+
+  // Network shell exfiltration.
+  /\bnc\b[^|;]*\s-[a-zA-Z]*[ec][a-zA-Z]*\s/i,
+];
+
+/** `yolo`: any critical match on the raw line requires approval. */
+export function criticalReason(command: string): string | undefined {
+  if (command.length > MAX_COMMAND_LENGTH) return "command too long";
+  return CRITICAL_COMMAND_PATTERNS.some((pattern) => pattern.test(command))
+    ? "critical pattern detected"
+    : undefined;
+}
 
 const DANGEROUS_COMMANDS = new Set([
   "rm",
@@ -32,10 +86,36 @@ function basename(value: string): string {
 }
 
 /**
- * Linear, quote-aware tokenizer. Shell expansion, redirection, or an unclosed quote
- * returns undefined so callers fail closed and treat the command as dangerous.
+ * Drops a write redirection to an allowed target (default `/dev/null`): it has no side effect yet
+ * shows up in read-only commands. Returns the index after the redirection, or undefined when the
+ * target is not allowed so callers fail closed.
  */
-function splitSegments(command: string): string[][] | undefined {
+function matchRedirectTarget(
+  command: string,
+  start: number,
+  targets: readonly string[],
+): number | undefined {
+  if (command[start] !== ">") return undefined;
+  let targetStart = start + 1;
+  if (command[targetStart] === ">") targetStart++;
+  while (command[targetStart] === " " || command[targetStart] === "\t") targetStart++;
+
+  for (const target of targets) {
+    if (target.length === 0 || !command.startsWith(target, targetStart)) continue;
+    const end = targetStart + target.length;
+    const next = command[end];
+    if (next !== undefined && !" \t\n;&|(){}".includes(next)) continue;
+    return end;
+  }
+  return undefined;
+}
+
+/**
+ * Linear, quote-aware tokenizer. Shell expansion, redirection to a target outside
+ * `redirects`, or an unclosed quote returns undefined so callers fail closed and
+ * treat the command as dangerous.
+ */
+function splitSegments(command: string, redirects: readonly string[]): string[][] | undefined {
   const segments: string[][] = [];
   let current: string[] = [];
   let token = "";
@@ -90,6 +170,15 @@ function splitSegments(command: string): string[][] | undefined {
       flushToken();
       continue;
     }
+    const redirectStart = char === ">" ? index : char === "&" && command[index + 1] === ">" ? index + 1 : -1;
+    if (redirectStart >= 0) {
+      const redirectEnd = matchRedirectTarget(command, redirectStart, redirects);
+      if (redirectEnd === undefined || (token !== "" && !/^\d+$/.test(token))) return undefined;
+      token = "";
+      started = false;
+      index = redirectEnd - 1;
+      continue;
+    }
     if (char === "\n" || char === ";" || char === "&" || char === "|") {
       flushSegment();
       const next = command[index + 1];
@@ -100,7 +189,7 @@ function splitSegments(command: string): string[][] | undefined {
       flushSegment();
       continue;
     }
-    if (char === ">" || char === "<" || char === "$" || char === "`" || char === "\0" || char === "\r") {
+    if (char === "<" || char === "$" || char === "`" || char === "\0" || char === "\r") {
       return undefined;
     }
     token += char;
@@ -112,7 +201,21 @@ function splitSegments(command: string): string[][] | undefined {
   return segments;
 }
 
-function analyzeSegment(tokens: string[]): string | undefined {
+const dangerousSets = new Map<string, ReadonlySet<string>>();
+
+/** Union of the built-in dangerous set and `extraDangerous`, cached by configuration content. */
+function dangerousSet(extra: readonly string[] | undefined): ReadonlySet<string> {
+  if (extra === undefined || extra.length === 0) return DANGEROUS_COMMANDS;
+  const key = extra.join("\0");
+  const cached = dangerousSets.get(key);
+  if (cached !== undefined) return cached;
+  const merged = new Set([...DANGEROUS_COMMANDS, ...extra.map((name) => name.toLowerCase())]);
+  dangerousSets.set(key, merged);
+  return merged;
+}
+
+/** Skips variable assignments, `env`, and wrapper prefixes to reach the command that actually runs. */
+function resolveCommand(tokens: string[]): { command: string; args: string[] } | undefined {
   let index = 0;
 
   while (index < tokens.length) {
@@ -154,20 +257,42 @@ function analyzeSegment(tokens: string[]): string | undefined {
   }
 
   if (index >= tokens.length) return undefined;
-  const command = basename(tokens[index] ?? "").toLowerCase();
-  const args = tokens.slice(index + 1);
+  return { command: basename(tokens[index] ?? "").toLowerCase(), args: tokens.slice(index + 1) };
+}
+
+/** `yolo` extra names: only the user-supplied list, still resolved through wrappers. */
+export function extraDangerousReason(
+  command: string,
+  extraDangerous: readonly string[] | undefined,
+  redirects?: readonly string[],
+): string | undefined {
+  if (extraDangerous === undefined || extraDangerous.length === 0) return undefined;
+  const names = new Set(extraDangerous.map((name) => name.toLowerCase()));
+  const segments = splitSegments(command, redirects ?? DEFAULT_REDIRECT_TARGETS);
+  if (segments === undefined) return undefined;
+  for (const segment of segments) {
+    const resolved = resolveCommand(segment);
+    if (resolved !== undefined && names.has(resolved.command)) return `dangerous command: ${resolved.command}`;
+  }
+  return undefined;
+}
+
+function analyzeSegment(tokens: string[], options: AnalysisOptions): string | undefined {
+  const resolved = resolveCommand(tokens);
+  if (resolved === undefined) return undefined;
+  const { command, args } = resolved;
 
   if (command === "rm" || command === "rmdir") return "recursive/forced file removal";
   if (command === "sudo") return "privilege escalation";
   if (command === "source") return "shell sourcing";
-  if (DANGEROUS_COMMANDS.has(command)) return `dangerous command: ${command}`;
+  if (dangerousSet(options.extraDangerous).has(command)) return `dangerous command: ${command}`;
 
   if (SHELLS.has(command)) {
     const codeFlag = args.findIndex((arg) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(arg));
-    if (codeFlag >= 0 && args[codeFlag + 1] !== undefined) return analyzeCommand(args[codeFlag + 1] ?? "");
+    if (codeFlag >= 0 && args[codeFlag + 1] !== undefined) return analyzeCommand(args[codeFlag + 1] ?? "", options);
     return `shell execution: ${command}`;
   }
-  if (command === "eval") return analyzeCommand(args.join(" "));
+  if (command === "eval") return analyzeCommand(args.join(" "), options);
   if (command === "xargs") return "xargs execution";
   if (command === "find") {
     if (args.some((arg) => ["-delete", "-exec", "-execdir", "-ok", "-okdir"].includes(arg))) {
@@ -262,13 +387,13 @@ function analyzeGh(args: string[]): string | undefined {
   return undefined;
 }
 
-function analyzeCommand(command: string): string | undefined {
+function analyzeCommand(command: string, options: AnalysisOptions = {}): string | undefined {
   if (command.length > MAX_COMMAND_LENGTH) return "command too long";
   if (/:\(\)\s*\{/.test(command)) return "fork bomb";
-  const segments = splitSegments(command);
+  const segments = splitSegments(command, options.redirects ?? DEFAULT_REDIRECT_TARGETS);
   if (segments === undefined) return "unparseable command";
   for (const segment of segments) {
-    const reason = analyzeSegment(segment);
+    const reason = analyzeSegment(segment, options);
     if (reason !== undefined) return reason;
   }
   return undefined;
@@ -278,10 +403,10 @@ export function hasRmInvocation(command: string): boolean {
   return analyzeCommand(command) === "recursive/forced file removal";
 }
 
-export function dangerReason(command: string): string | undefined {
-  return analyzeCommand(command);
+export function dangerReason(command: string, options?: AnalysisOptions): string | undefined {
+  return analyzeCommand(command, options);
 }
 
-export function isDangerousBash(command: string): boolean {
-  return analyzeCommand(command) !== undefined;
+export function isDangerousBash(command: string, options?: AnalysisOptions): boolean {
+  return analyzeCommand(command, options) !== undefined;
 }

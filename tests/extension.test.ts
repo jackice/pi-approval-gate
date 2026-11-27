@@ -127,3 +127,73 @@ it("uses the native approval view by default", async () => {
     result: { exitCode: 1, cancelled: true },
   });
 });
+
+function gateFixture(approvalGate: unknown) {
+  const handlers = new Map<string, Handler>();
+  const custom = vi.fn(() => Promise.resolve("deny" as const));
+  const api = {
+    on(event: string, handler: Handler) { handlers.set(event, handler); },
+    registerFlag: vi.fn(),
+    registerTool: vi.fn(),
+    getFlag: () => undefined,
+    getSettings: () => ({ approvalGate }),
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    mode: "tui",
+    hasUI: true,
+    cwd: "/tmp",
+    sessionManager: { getSessionId: () => "session" },
+    ui: { custom },
+  } as unknown as ExtensionContext;
+  approvalGateExtension(api);
+  return { handlers, custom, ctx };
+}
+
+it("rejects a command matched by a deny pattern without prompting", async () => {
+  const { handlers, custom, ctx } = gateFixture({
+    patterns: [{ match: "deploy *", approval: "deny" }],
+  });
+
+  const result = await handlers.get("user_bash")?.({ command: "deploy prod", cwd: "/tmp" }, ctx);
+
+  expect(custom).not.toHaveBeenCalled();
+  expect(result).toMatchObject({ result: { exitCode: 1, cancelled: true } });
+  expect((result as { result: { output: string } }).result.output).toContain(
+    "Blocked by bash pattern: deploy *",
+  );
+});
+
+it("passes a command matched by an allow pattern straight through", async () => {
+  const { handlers, custom, ctx } = gateFixture({
+    patterns: [{ match: "git *", approval: "allow" }],
+  });
+
+  await expect(handlers.get("user_bash")?.({ command: "git status", cwd: "/tmp" }, ctx))
+    .resolves.toBeUndefined();
+  expect(custom).not.toHaveBeenCalled();
+});
+
+it("still prompts when an allow pattern cannot vouch for the whole command", async () => {
+  const { handlers, custom, ctx } = gateFixture({
+    patterns: [{ match: "git *", approval: "allow" }],
+  });
+
+  const result = handlers.get("user_bash")?.({
+    command: "git status && rm -rf /tmp/fixture",
+    cwd: "/tmp",
+  }, ctx);
+
+  expect(custom).toHaveBeenCalled();
+  await expect(result).resolves.toMatchObject({ result: { exitCode: 1, cancelled: true } });
+});
+
+it("prompts on a command matched by a prompt pattern", async () => {
+  const { handlers, custom, ctx } = gateFixture({
+    patterns: [{ match: "curl *", approval: "prompt" }],
+  });
+
+  const result = handlers.get("user_bash")?.({ command: "curl https://example.com", cwd: "/tmp" }, ctx);
+
+  expect(custom).toHaveBeenCalled();
+  await expect(result).resolves.toMatchObject({ result: { exitCode: 1, cancelled: true } });
+});

@@ -15,7 +15,8 @@ import { createApprovalPrompt } from "./src/dialog.ts";
 import { createBashSpawnHook } from "./src/bash-hook.ts";
 import { verifyFinalBinding } from "./src/binding.ts";
 import { ApprovalGate, type ApprovalAuthorization, type ApprovalRequest } from "./src/gate.ts";
-import { dangerReason } from "./src/policy.ts";
+import { parsePolicyConfig } from "./src/policy-config.ts";
+import { evaluatePolicy } from "./src/policy-rules.ts";
 import { uvGuard } from "./src/uv-guard.ts";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -56,6 +57,9 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
     return settings?.approvalGate?.guard === "uv" ? uvGuard : undefined;
   };
 
+  /** Also resolved per call, so a settings.json edit applies to the next command. */
+  const policyConfig = () => parsePolicyConfig(approvalGateSettings(pi)).config;
+
   const timeoutMs = () =>
     numberFlag(pi, "approval-timeout-ms", "PI_APPROVAL_TIMEOUT_MS", DEFAULT_TIMEOUT_MS);
   const gate = new ApprovalGate({ timeoutMs, maxPending: MAX_PENDING });
@@ -63,7 +67,7 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
   let shadowed = false;
 
   const template = createBashToolDefinition(process.cwd(), {
-    spawnHook: (context) => verifyFinalBinding(undefined, undefined, context),
+    spawnHook: (context) => verifyFinalBinding(undefined, undefined, context, undefined, policyConfig()),
   });
   pi.registerTool({
     ...template,
@@ -82,10 +86,21 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
           details: undefined,
         };
       }
-      const reason = dangerReason(finalCommand);
+      const config = policyConfig();
+      const verdict = evaluatePolicy(finalCommand, config);
+      if (verdict.decision === "deny") {
+        return {
+          content: [{
+            type: "text",
+            text: `${verdict.reason}; command was not executed.`,
+          }],
+          isError: true,
+          details: undefined,
+        };
+      }
       let authorization: ApprovalAuthorization | undefined;
       let approvalRequest: ApprovalRequest | undefined;
-      if (reason !== undefined) {
+      if (verdict.decision === "prompt") {
         const approved = await gate.request(
           {
             sessionId: ctx.sessionManager.getSessionId(),
@@ -93,7 +108,7 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
             toolName: "bash",
             command: finalCommand,
             cwd,
-            reason,
+            reason: verdict.reason ?? "policy",
             risk: "high",
           },
           {
@@ -125,6 +140,7 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
         authorization,
         request: approvalRequest,
         signal,
+        config,
       }));
       try {
         return await createBashToolDefinition(cwd, options).execute(
@@ -149,6 +165,13 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
         "error",
       );
     }
+    const { dropped } = parsePolicyConfig(approvalGateSettings(pi));
+    if (dropped > 0 && ctx.hasUI) {
+      ctx.ui.notify(
+        `approval gate: ignored ${dropped} invalid approvalGate setting(s)`,
+        "warning",
+      );
+    }
   });
 
   pi.on("tool_call", (event) => {
@@ -168,10 +191,21 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
         result: { output: blocked, exitCode: 1, cancelled: true, truncated: false },
       };
     }
-    const reason = dangerReason(command);
+    const config = policyConfig();
+    const verdict = evaluatePolicy(command, config);
+    if (verdict.decision === "deny") {
+      return {
+        result: {
+          output: `${verdict.reason}; command was not executed.`,
+          exitCode: 1,
+          cancelled: true,
+          truncated: false,
+        },
+      };
+    }
     let authorization: ApprovalAuthorization | undefined;
     let request: ApprovalRequest | undefined;
-    if (reason !== undefined) {
+    if (verdict.decision === "prompt") {
       const approved = await gate.request(
         {
           sessionId: ctx.sessionManager.getSessionId(),
@@ -179,7 +213,7 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
           toolName: "user_bash",
           command,
           cwd: event.cwd,
-          reason,
+          reason: verdict.reason ?? "policy",
           risk: "high",
         },
         {
@@ -211,6 +245,7 @@ export default function approvalGateExtension(pi: ExtensionAPI): void {
             authorization,
             request,
             signal: options.signal,
+            config,
           });
           try {
             const context = spawnHook({ command, cwd, env: options.env ?? process.env });
@@ -237,6 +272,12 @@ function sameSourceFile(actual: string, expected: string): boolean {
 interface ShellSettings {
   commandPrefix?: string;
   shellPath?: string;
+}
+
+function approvalGateSettings(pi: ExtensionAPI): unknown {
+  const raw: unknown = typeof pi.getSettings === "function" ? pi.getSettings() : undefined;
+  if (typeof raw !== "object" || raw === null) return undefined;
+  return (raw as Record<string, unknown>).approvalGate;
 }
 
 function shellSettings(pi: ExtensionAPI): ShellSettings {

@@ -89,4 +89,36 @@ describe("bash policy", () => {
     expect(isDangerousBash("echo hi > /etc/passwd")).toBe(true);
     expect(isDangerousBash("echo `whoami`")).toBe(true);
   });
+
+  it("ignores writes to /dev/null", () => {
+    expect(isDangerousBash("ls 2>/dev/null")).toBe(false);
+    expect(isDangerousBash("ls > /dev/null")).toBe(false);
+    expect(isDangerousBash("ls &>/dev/null")).toBe(false);
+    expect(isDangerousBash("rg -l x . 2>>/dev/null | head")).toBe(false);
+    expect(isDangerousBash("rm -rf /tmp/x 2>/dev/null")).toBe(true);
+    expect(isDangerousBash("ls > /dev/null/x")).toBe(true);
+    expect(isDangerousBash("ls >/dev/nulls")).toBe(true);
+  });
+});
+
+describe("analysis options", () => {
+  it("uses configured redirect targets instead of the /dev/null default", () => {
+    expect(isDangerousBash("ls > /tmp/gate.log", { redirects: ["/tmp/gate.log"] })).toBe(false);
+    expect(isDangerousBash("ls > /dev/null", { redirects: ["/tmp/gate.log"] })).toBe(true);
+    expect(isDangerousBash("ls > /dev/null", { redirects: [] })).toBe(true);
+  });
+
+  it("appends configured dangerous commands", () => {
+    expect(isDangerousBash("kubectl get pods")).toBe(false);
+    expect(isDangerousBash("kubectl get pods", { extraDangerous: ["kubectl"] })).toBe(true);
+    expect(isDangerousBash("sh -c 'kubectl get pods'", { extraDangerous: ["kubectl"] })).toBe(true);
+    expect(dangerReason("/usr/local/bin/teamctl apply", { extraDangerous: ["teamctl"] })).toBe(
+      "dangerous command: teamctl",
+    );
+  });
+
+  it("keeps built-in detection when options are provided", () => {
+    expect(isDangerousBash("rm -rf ~/x", { extraDangerous: ["kubectl"] })).toBe(true);
+    expect(isDangerousBash("ls 2>/dev/null", { extraDangerous: ["kubectl"] })).toBe(false);
+  });
 });

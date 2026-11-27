@@ -39,3 +39,9 @@ it("rejects a dangerous command that has no approval", () => {
 
   expect(() => hook({ command: "rm -rf /tmp/x", cwd: "/tmp", env: {} })).toThrow(/binding mismatch/);
 });
+
+it("lets a policy-permitted command through without an approval", () => {
+  const hook = createBashSpawnHook({});
+
+  expect(() => hook({ command: "git push origin main", cwd: "/tmp", env: {} })).not.toThrow();
+});
